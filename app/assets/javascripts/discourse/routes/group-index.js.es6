@@ -1,18 +1,38 @@
-import ShowFooter from "discourse/mixins/show-footer";
+import showModal from "discourse/lib/show-modal";
 
-export default Discourse.Route.extend(ShowFooter, {
+export default Discourse.Route.extend({
+  titleToken() {
+    return I18n.t("groups.members.title");
+  },
+
+  model(params) {
+    this._params = params;
+    return this.modelFor("group");
+  },
+
+  setupController(controller, model) {
+    this.controllerFor("group").set("showing", "members");
+
+    controller.setProperties({
+      model,
+      filterInput: this._params.filter
+    });
+
+    controller.refreshMembers();
+  },
+
   actions: {
-    didTransition: function() {
+    showAddMembersModal() {
+      showModal("group-add-members", { model: this.modelFor("group") });
+    },
+
+    showBulkAddModal() {
+      showModal("group-bulk-add", { model: this.modelFor("group") });
+    },
+
+    didTransition() {
+      this.controllerFor("group-index").set("filterInput", this._params.filter);
       return true;
     }
-  },
-
-  model: function() {
-    return this.modelFor('group').findPosts();
-  },
-
-  setupController: function(controller, model) {
-    controller.set('model', model);
-    this.controllerFor('group').set('showing', 'index');
   }
 });

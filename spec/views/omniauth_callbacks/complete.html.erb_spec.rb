@@ -1,4 +1,4 @@
-require "spec_helper"
+require "rails_helper"
 
 require "auth/authenticator"
 require_dependency "auth/result"
@@ -6,14 +6,14 @@ require_dependency "auth/result"
 describe "users/omniauth_callbacks/complete.html.erb" do
 
   let :rendered_data do
-    returned = JSON.parse(rendered.match(/window.opener.Discourse.authenticationComplete\((.*)\)/)[1])
+    JSON.parse(rendered.match(/data-auth-result="([^"]*)"/)[1].gsub('&quot;', '"'))
   end
 
   it "renders auth info" do
     result = Auth::Result.new
     result.user = User.new
 
-    assign(:data, result)
+    assign(:auth_result, result)
 
     render
 
@@ -28,16 +28,12 @@ describe "users/omniauth_callbacks/complete.html.erb" do
     result.email = "xxx@xxx.com"
     result.authenticator_name = "CAS"
 
-    assign(:data, result)
+    assign(:auth_result, result)
 
     render
 
     expect(rendered_data["email"]).to eq(result.email)
-    # TODO this is a bit weird, the upcasing is confusing,
-    #  clean it up throughout
-    expect(rendered_data["auth_provider"]).to eq("Cas")
+    expect(rendered_data["auth_provider"]).to eq("CAS")
   end
 
 end
-
-

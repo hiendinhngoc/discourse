@@ -1,31 +1,56 @@
-import { iconHTML } from 'discourse/helpers/fa-icon';
+import { default as computed } from "ember-addons/ember-computed-decorators";
 
 export default Ember.Component.extend({
-  tagName: 'button',
-  classNameBindings: [':btn'],
-  attributeBindings: ['disabled', 'translatedTitle:title'],
+  // subclasses need this
+  layoutName: "components/d-button",
 
-  translatedTitle: function() {
-    var label = this.get('label');
-    if (label) {
-      return I18n.t(this.get('label'));
-    }
-  }.property('label'),
+  form: null,
 
-  render: function(buffer) {
-    var title = this.get('translatedTitle'),
-        icon = this.get('icon');
+  tagName: "button",
+  classNameBindings: [":btn", "noText", "btnType"],
+  attributeBindings: [
+    "form",
+    "disabled",
+    "translatedTitle:title",
+    "translatedLabel:aria-label",
+    "tabindex"
+  ],
 
-    if (title || icon) {
-      if (icon) { buffer.push(iconHTML(icon) + ' '); }
-      if (title) { buffer.push(title); }
-    } else {
-      // If no label or icon is present, yield
-      return this._super();
+  btnIcon: Ember.computed.notEmpty("icon"),
+
+  @computed("icon", "translatedLabel")
+  btnType(icon, translatedLabel) {
+    if (icon) {
+      return translatedLabel ? "btn-icon-text" : "btn-icon";
+    } else if (translatedLabel) {
+      return "btn-text";
     }
   },
 
-  click: function() {
-    this.sendAction("action", this.get("actionParam"));
+  noText: Ember.computed.empty("translatedLabel"),
+
+  @computed("title")
+  translatedTitle(title) {
+    if (title) return I18n.t(title);
+  },
+
+  @computed("label")
+  translatedLabel(label) {
+    if (label) return I18n.t(label);
+  },
+
+  click() {
+    if (typeof this.get("action") === "string") {
+      this.sendAction("action", this.get("actionParam"));
+    } else if (
+      typeof this.get("action") === "object" &&
+      this.get("action").value
+    ) {
+      this.get("action").value(this.get("actionParam"));
+    } else if (typeof this.get("action") === "function") {
+      this.get("action")(this.get("actionParam"));
+    }
+
+    return false;
   }
 });

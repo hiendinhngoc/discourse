@@ -1,19 +1,44 @@
-/**
-  This is a custom text field that allows i18n placeholders
+import computed from "ember-addons/ember-computed-decorators";
+import { siteDir, isRTL, isLTR } from "discourse/lib/text-direction";
 
-  @class TextField
-  @extends Ember.TextField
-  @namespace Discourse
-  @module Discourse
-**/
 export default Ember.TextField.extend({
-  attributeBindings: ['autocorrect', 'autocapitalize', 'autofocus', 'maxLength'],
+  attributeBindings: [
+    "autocorrect",
+    "autocapitalize",
+    "autofocus",
+    "maxLength",
+    "dir"
+  ],
 
-  placeholder: function() {
-    if (this.get('placeholderKey')) {
-      return I18n.t(this.get('placeholderKey'));
-    } else {
-      return '';
+  @computed
+  dir() {
+    if (this.siteSettings.support_mixed_text_direction) {
+      let val = this.value;
+      if (val) {
+        return isRTL(val) ? "rtl" : "ltr";
+      } else {
+        return siteDir();
+      }
     }
-  }.property('placeholderKey')
+  },
+
+  keyUp(event) {
+    this._super(event);
+
+    if (this.siteSettings.support_mixed_text_direction) {
+      let val = this.value;
+      if (isRTL(val)) {
+        this.set("dir", "rtl");
+      } else if (isLTR(val)) {
+        this.set("dir", "ltr");
+      } else {
+        this.set("dir", siteDir());
+      }
+    }
+  },
+
+  @computed("placeholderKey")
+  placeholder(placeholderKey) {
+    return placeholderKey ? I18n.t(placeholderKey) : "";
+  }
 });

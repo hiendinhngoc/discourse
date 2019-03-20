@@ -1,10 +1,26 @@
-export default Em.Mixin.create({
-  needs: ['modal'],
+import showModal from "discourse/lib/show-modal";
 
-  flash: function(message, messageClass) {
-    this.set('flashMessage', Em.Object.create({
-      message: message,
-      messageClass: messageClass
-    }));
+export default Ember.Mixin.create({
+  flash(text, messageClass) {
+    this.appEvents.trigger("modal-body:flash", { text, messageClass });
+  },
+
+  clearFlash() {
+    this.appEvents.trigger("modal-body:clearFlash");
+  },
+
+  showModal(...args) {
+    return showModal(...args);
+  },
+
+  actions: {
+    closeModal() {
+      this.get("modal").send("closeModal");
+      this.set("panels", []);
+    },
+
+    onSelectPanel(panel) {
+      this.set("selectedPanel", panel);
+    }
   }
 });

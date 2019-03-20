@@ -3,89 +3,72 @@
 // --------------------------------------------------
 
 .d-header {
-
-  #site-logo {
-    max-width: 122px;
-  }
+  height: 3.66em;
 
   // some protection for text-only site titles
   .title {
-    margin-left: 10px;
-    max-width: 135px;
+    max-width: 75%;
+    white-space: nowrap;
     overflow: hidden;
-    padding: 0;
-    text-overflow: clip;
-    display: block; // table causes clipping fail oddities here
-  }
-
-  .icons {
-    .badge-notification {
-      color: $secondary;
-    }
-
-    .active .icon {
-      &:after { margin-top: -1px; }
+    text-overflow: ellipsis;
+    -webkit-animation: fadein 0.5s;
+    animation: fadein 0.5s;
+    a {
+      display: block;
+      width: 100%;
     }
   }
 
+  #site-logo {
+    max-height: 2.4em;
+    max-width: 100%;
+  }
+  #site-text-logo {
+    margin: 0;
+    font-size: $font-up-1;
+  }
+  .extra-info-wrapper {
+    .extra-info {
+      // header title should not be centered if there's no tags / categories
+      &:not(.two-rows) {
+        min-height: 2.25em;
+      }
+      h1 {
+        font-size: $font-0;
+      }
+      .private-message-glyph-wrapper {
+        float: left;
+      }
+    }
+  }
   button.sign-up-button {
-    display:none;
+    display: none;
+  }
+  // styles for mobile scroll logo / topic
+  .panel {
+    -webkit-animation: fadein 0.5s;
+    animation: fadein 0.5s;
+  }
+  &.scroll-down .panel {
+    display: none;
+  }
+}
+
+.d-header-icons {
+  .d-icon {
+    line-height: $line-height-medium;
+  }
+  .active .icon {
+    &:after {
+      margin-top: -1px;
+    }
   }
 }
 
 #main-outlet {
-  padding-top: 60px;
-}
-
-// Dropdowns
-// --------------------------------------------------
-
-.d-dropdown {
-  width: 290px;
-  margin-top: -1px;
-
-  // Common
-
-  .heading {
-    color: $primary;
-    font-weight: bold;
-    font-size: 0.857em;
-    line-height: 15px;
-  }
-
-  // Search
-
-  .searching {
-    position: absolute;
-    top: 0;
-    right: 25px;
-  }
-
-  input[type='text'] {
-    width: 265px;
-    font-size: 1.143em;
-  }
-
-  &#user-dropdown {
-    width: 155px;
-  }
-
-  .btn {
-    padding: 2px 8px;
-    .fa {
-      margin-right: 5px;
-    }
-  }
+  padding-top: 4.2857em;
 }
 
 .search-link .badge-category {
   display: none;
-}
-
-.search-link .topic-statuses .topic-status i {
-  font-size: 1em;
-}
-
-.d-dropdown#search-dropdown .heading {
-  padding: 0;
 }

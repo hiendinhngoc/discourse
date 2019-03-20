@@ -12,8 +12,11 @@
       <p><%= t 'activation.approval_required' %></p>
     <% else %>
       <p><%= t('activation.please_continue') %></p>
-      <p><a class="btn" href="/"><%= t('activation.continue_button', site_name: SiteSetting.title) -%></a></p>
-      <%= render partial: 'auto_redirect_home' %>
+      <p><a class="btn" href="<%= path "/" %>"><%= t('activation.continue_button', site_name: SiteSetting.title) -%></a></p>
+      <%- content_for(:no_ember_head) do %>
+        <%= tag.meta id: 'data-auto-redirect', data: { path: path('/') } %>
+      <%- end %>
+      <%= preload_script 'auto-redirect' %>
     <% end %>
   <%end%>
 </div>

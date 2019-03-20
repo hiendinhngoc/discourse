@@ -1,46 +1,77 @@
-import registerUnbound from 'discourse/helpers/register-unbound';
+import { registerUnbound } from "discourse-common/lib/helpers";
+import { avatarImg, formatUsername } from "discourse/lib/utilities";
 
-export function renderAvatar(user, options) {
+let _customAvatarHelpers;
+
+export function registerCustomAvatarHelper(fn) {
+  _customAvatarHelpers = _customAvatarHelpers || [];
+  _customAvatarHelpers.push(fn);
+}
+
+export function addExtraUserClasses(u, args) {
+  let extraClasses = classesForUser(u).join(" ");
+  if (extraClasses && extraClasses.length) {
+    args.extraClasses = extraClasses;
+  }
+  return args;
+}
+
+export function classesForUser(u) {
+  let result = [];
+  if (_customAvatarHelpers) {
+    for (let i = 0; i < _customAvatarHelpers.length; i++) {
+      result = result.concat(_customAvatarHelpers[i](u));
+    }
+  }
+  return result;
+}
+
+function renderAvatar(user, options) {
   options = options || {};
 
   if (user) {
-    var username = Em.get(user, 'username');
-    if (!username) {
-      if (!options.usernamePath) { return ''; }
-      username = Em.get(user, options.usernamePath);
+    const name = Ember.get(user, options.namePath || "name");
+    const username = Ember.get(user, options.usernamePath || "username");
+    const avatarTemplate = Ember.get(
+      user,
+      options.avatarTemplatePath || "avatar_template"
+    );
+
+    if (!username || !avatarTemplate) {
+      return "";
     }
 
-    var title;
-    if (!options.ignoreTitle) {
+    let displayName = name || formatUsername(username);
+
+    let title = options.title;
+    if (!title && !options.ignoreTitle) {
       // first try to get a title
-      title = Em.get(user, 'title');
+      title = Ember.get(user, "title");
       // if there was no title provided
       if (!title) {
         // try to retrieve a description
-        var description = Em.get(user, 'description');
+        const description = Ember.get(user, "description");
         // if a description has been provided
         if (description && description.length > 0) {
           // preprend the username before the description
-          title = username + " - " + description;
+          title = displayName + " - " + description;
         }
       }
     }
 
-    // this is simply done to ensure we cache images correctly
-    var uploadedAvatarId = Em.get(user, 'uploaded_avatar_id') || Em.get(user, 'user.uploaded_avatar_id');
-    var avatarTemplate = Discourse.User.avatarTemplate(username,uploadedAvatarId);
-
-    return Discourse.Utilities.avatarImg({
+    return avatarImg({
       size: options.imageSize,
-      extraClasses: Em.get(user, 'extras') || options.extraClasses,
-      title: title || username,
+      extraClasses: Ember.get(user, "extras") || options.extraClasses,
+      title: title || displayName,
       avatarTemplate: avatarTemplate
     });
   } else {
-    return '';
+    return "";
   }
 }
 
-registerUnbound('avatar', function(user, params) {
+registerUnbound("avatar", function(user, params) {
   return new Handlebars.SafeString(renderAvatar.call(this, user, params));
 });
+
+export { renderAvatar };

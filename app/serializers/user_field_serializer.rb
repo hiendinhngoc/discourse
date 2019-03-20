@@ -4,5 +4,17 @@ class UserFieldSerializer < ApplicationSerializer
              :description,
              :field_type,
              :editable,
-             :required
+             :required,
+             :show_on_profile,
+             :show_on_user_card,
+             :position,
+             :options
+
+  def options
+    object.user_field_options.pluck(:value)
+  end
+
+  def include_options?
+    options.present?
+  end
 end

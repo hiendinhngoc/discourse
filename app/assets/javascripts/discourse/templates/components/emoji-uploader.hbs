@@ -1,6 +1,11 @@
 {{text-field name="name" placeholderKey="admin.emoji.name" value=name}}
-<input type="file" accept=".png,.gif" style="display:none" />
-<button {{bind-attr disabled="addDisabled"}} {{action "selectFile"}} class='btn btn-primary'>
-  {{fa-icon "plus"}}
-  {{i18n 'admin.emoji.add'}}
-</button>
+
+<label class="btn btn-primary {{if addDisabled 'disabled'}}">
+  {{d-icon "plus"}}
+  {{i18n "admin.emoji.add"}}
+  <input
+    class="hidden-upload-field"
+    disabled={{addDisabled}}
+    type="file"
+    accept=".png,.gif" />
+</label>

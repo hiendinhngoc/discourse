@@ -1,14 +1,35 @@
+require_dependency "db_helper"
+
 module BackupRestore
 
-  class RestoreDisabledError  < RuntimeError; end
+  class RestoreDisabledError < RuntimeError; end
   class FilenameMissingError < RuntimeError; end
 
   class Restorer
-
     attr_reader :success
 
-    def initialize(user_id, filename, publish_to_message_bus = false)
-      @user_id, @filename, @publish_to_message_bus = user_id, filename, publish_to_message_bus
+    def self.pg_produces_portable_dump?(version)
+      version = Gem::Version.new(version)
+
+      %w{
+        10.3
+        9.6.8
+        9.5.12
+        9.4.17
+        9.3.22
+      }.each do |unportable_version|
+        return false if Gem::Dependency.new("", "~> #{unportable_version}").match?("", version)
+      end
+
+      true
+    end
+
+    def initialize(user_id, opts = {})
+      @user_id = user_id
+      @client_id = opts[:client_id]
+      @filename = opts[:filename]
+      @publish_to_message_bus = opts[:publish_to_message_bus] || false
+      @disable_emails = opts.fetch(:disable_emails, true)
 
       ensure_restore_is_enabled
       ensure_no_operation_is_running
@@ -35,26 +56,34 @@ module BackupRestore
       validate_metadata
 
       extract_dump
-      restore_dump
 
-      ### READ-ONLY / START ###
-      enable_readonly_mode
-
-      pause_sidekiq
-      wait_for_sidekiq
-
-      switch_schema!
-
-      # TOFIX: MessageBus is busted...
+      if !can_restore_into_different_schema?
+        log "Cannot restore into different schema, restoring in-place"
+        enable_readonly_mode
+        pause_sidekiq
+        wait_for_sidekiq
+        BackupRestore.move_tables_between_schemas("public", "backup")
+        @db_was_changed = true
+        restore_dump
+      else
+        log "Restoring into 'backup' schema"
+        restore_dump
+        enable_readonly_mode
+        pause_sidekiq
+        wait_for_sidekiq
+        switch_schema!
+      end
 
       migrate_database
       reconnect_database
       reload_site_settings
-
+      clear_emoji_cache
       disable_readonly_mode
-      ### READ-ONLY / END ###
+      clear_theme_cache
 
       extract_uploads
+
+      after_restore_hook
     rescue SystemExit
       log "Restore process was cancelled!"
       rollback
@@ -65,15 +94,17 @@ module BackupRestore
     else
       @success = true
     ensure
-      notify_user rescue nil
       clean_up
+      notify_user
+      log "Finished!"
+
       @success ? log("[SUCCESS]") : log("[FAILED]")
     end
 
     protected
 
     def ensure_restore_is_enabled
-      raise Restore::RestoreDisabledError unless Rails.env.development? || SiteSetting.allow_restore?
+      raise BackupRestore::RestoreDisabledError unless Rails.env.development? || SiteSetting.allow_restore?
     end
 
     def ensure_no_operation_is_running
@@ -88,11 +119,12 @@ module BackupRestore
     end
 
     def ensure_we_have_a_filename
-      raise Restore::FilenameMissingError if @filename.nil?
+      raise BackupRestore::FilenameMissingError if @filename.nil?
     end
 
     def initialize_state
       @success = false
+      @store = BackupRestore::BackupStore.create
       @db_was_changed = false
       @current_db = RailsMultisite::ConnectionManagement.current_db
       @current_version = BackupRestore.current_version
@@ -101,7 +133,8 @@ module BackupRestore
       @archive_filename = File.join(@tmp_directory, @filename)
       @tar_filename = @archive_filename[0...-3]
       @meta_filename = File.join(@tmp_directory, BackupRestore::METADATA_FILE)
-      @dump_filename = File.join(@tmp_directory, BackupRestore::DUMP_FILE)
+      @is_archive = !(@filename =~ /.sql.gz$/)
+
       @logs = []
       @readonly_mode_was_enabled = Discourse.readonly_mode?
     end
@@ -153,25 +186,57 @@ module BackupRestore
     end
 
     def copy_archive_to_tmp_directory
-      log "Copying archive to tmp directory..."
-      source = File.join(Backup.base_directory, @filename)
-      `cp #{source} #{@archive_filename}`
+      if @store.remote?
+        log "Downloading archive to tmp directory..."
+        failure_message = "Failed to download archive to tmp directory."
+      else
+        log "Copying archive to tmp directory..."
+        failure_message = "Failed to copy archive to tmp directory."
+      end
+
+      @store.download_file(@filename, @archive_filename, failure_message)
     end
 
     def unzip_archive
-      log "Unzipping archive..."
-      FileUtils.cd(@tmp_directory) { `gzip --decompress #{@archive_filename}` }
+      return unless @is_archive
+
+      log "Unzipping archive, this may take a while..."
+
+      FileUtils.cd(@tmp_directory) do
+        Discourse::Utils.execute_command('gzip', '--decompress', @archive_filename, failure_message: "Failed to unzip archive.")
+      end
     end
 
     def extract_metadata
-      log "Extracting metadata file..."
-      FileUtils.cd(@tmp_directory) { `tar --extract --file #{@tar_filename} #{BackupRestore::METADATA_FILE}` }
-      @metadata = Oj.load_file(@meta_filename)
+      @metadata =
+        if system('tar', '--list', '--file', @tar_filename, BackupRestore::METADATA_FILE)
+          log "Extracting metadata file..."
+          FileUtils.cd(@tmp_directory) do
+            Discourse::Utils.execute_command(
+              'tar', '--extract', '--file', @tar_filename, BackupRestore::METADATA_FILE,
+              failure_message: "Failed to extract metadata file."
+            )
+          end
+
+          data = Oj.load_file(@meta_filename)
+          raise "Failed to load metadata file." if !data
+          data
+        else
+          log "No metadata file to extract."
+          if @filename =~ /-#{BackupRestore::VERSION_PREFIX}(\d{14})/
+            { "version" => Regexp.last_match[1].to_i }
+          else
+            raise "Migration version is missing from the filename."
+          end
+        end
     end
 
     def validate_metadata
       log "Validating metadata..."
       log "  Current version: #{@current_version}"
+
+      raise "Metadata has not been extracted correctly." if !@metadata
+
       log "  Restored version: #{@metadata["version"]}"
 
       error = "You're trying to restore a more recent version of the schema. You should migrate first!"
@@ -179,8 +244,50 @@ module BackupRestore
     end
 
     def extract_dump
+      @dump_filename =
+        if @is_archive
+          # For backwards compatibility
+          if system('tar', '--list', '--file', @tar_filename, BackupRestore::OLD_DUMP_FILE)
+            File.join(@tmp_directory, BackupRestore::OLD_DUMP_FILE)
+          else
+            File.join(@tmp_directory, BackupRestore::DUMP_FILE)
+          end
+        else
+          File.join(@tmp_directory, @filename)
+        end
+
+      return unless @is_archive
+
       log "Extracting dump file..."
-      FileUtils.cd(@tmp_directory) { `tar --extract --file #{@tar_filename} #{BackupRestore::DUMP_FILE}` }
+
+      FileUtils.cd(@tmp_directory) do
+        Discourse::Utils.execute_command(
+          'tar', '--extract', '--file', @tar_filename, File.basename(@dump_filename),
+          failure_message: "Failed to extract dump file."
+        )
+      end
+    end
+
+    def get_dumped_by_version
+      output = Discourse::Utils.execute_command(
+        File.extname(@dump_filename) == '.gz' ? 'zgrep' : 'grep',
+        '-m1', @dump_filename, '-e', "-- Dumped by pg_dump version",
+        failure_message: "Failed to check version of pg_dump used to generate the dump file"
+      )
+
+      output.match(/version (\d+(\.\d+)+)/)[1]
+    end
+
+    def can_restore_into_different_schema?
+      self.class.pg_produces_portable_dump?(get_dumped_by_version)
+    end
+
+    def restore_dump_command
+      if File.extname(@dump_filename) == '.gz'
+        "gzip -d < #{@dump_filename} | #{sed_command} | #{psql_command} 2>&1"
+      else
+        "#{psql_command} 2>&1 < #{@dump_filename}"
+      end
     end
 
     def restore_dump
@@ -199,7 +306,7 @@ module BackupRestore
         end
       end
 
-      IO.popen("#{psql_command} 2>&1") do |pipe|
+      IO.popen(restore_dump_command) do |pipe|
         begin
           while line = pipe.readline
             logs << line
@@ -219,7 +326,7 @@ module BackupRestore
     def psql_command
       db_conf = BackupRestore.database_configuration
 
-      password_argument = "PGPASSWORD=#{db_conf.password}" if db_conf.password.present?
+      password_argument = "PGPASSWORD='#{db_conf.password}'" if db_conf.password.present?
       host_argument     = "--host=#{db_conf.host}"         if db_conf.host.present?
       port_argument     = "--port=#{db_conf.port}"         if db_conf.port.present?
       username_argument = "--username=#{db_conf.username}" if db_conf.username.present?
@@ -227,16 +334,37 @@ module BackupRestore
       [ password_argument,                # pass the password to psql (if any)
         "psql",                           # the psql command
         "--dbname='#{db_conf.database}'", # connect to database *dbname*
-        "--file='#{@dump_filename}'",     # read the dump
         "--single-transaction",           # all or nothing (also runs COPY commands faster)
         host_argument,                    # the hostname to connect to (if any)
-        port_argument,                # the port to connect to (if any)
+        port_argument,                    # the port to connect to (if any)
         username_argument                 # the username to connect as (if any)
       ].join(" ")
     end
 
+    def sed_command
+      # in order to limit the downtime when restoring as much as possible
+      # we force the restoration to happen in the "restore" schema
+
+      # during the restoration, this make sure we
+      #  - drop the "restore" schema if it exists
+      #  - create the "restore" schema
+      #  - prepend the "restore" schema into the search_path
+
+      regexp = "SET search_path = public, pg_catalog;"
+
+      replacement = [ "DROP SCHEMA IF EXISTS restore CASCADE;",
+                      "CREATE SCHEMA restore;",
+                      "SET search_path = restore, public, pg_catalog;",
+                    ].join(" ")
+
+      # we only want to replace the VERY first occurence of the search_path command
+      expression = "1,/^#{regexp}$/s/#{regexp}/#{replacement}/"
+
+      "sed -e '#{expression}'"
+    end
+
     def switch_schema!
-      log "Switching schemas..."
+      log "Switching schemas... try reloading the site in 5 minutes, if successful, then reboot and restore is complete."
 
       sql = [
         "BEGIN;",
@@ -247,13 +375,22 @@ module BackupRestore
 
       @db_was_changed = true
 
-      User.exec_sql(sql)
+      DB.exec(sql)
     end
 
     def migrate_database
       log "Migrating the database..."
+
+      if Discourse.skip_post_deployment_migrations?
+        ENV["SKIP_POST_DEPLOYMENT_MIGRATIONS"] = "0"
+        Rails.application.config.paths['db/migrate'] << Rails.root.join(
+          Discourse::DB_POST_MIGRATE_PATH
+        ).to_s
+      end
+
       Discourse::Application.load_tasks
       ENV["VERSION"] = @current_version.to_s
+      DB.exec("SET search_path = public, pg_catalog;")
       Rake::Task["db:migrate"].invoke
     end
 
@@ -265,14 +402,68 @@ module BackupRestore
     def reload_site_settings
       log "Reloading site settings..."
       SiteSetting.refresh!
+
+      if @disable_emails
+        log "Disabling outgoing emails for non-staff users..."
+        user = User.find_by_email(@user_info[:email]) || Discourse.system_user
+        SiteSetting.set_and_log(:disable_emails, 'non-staff', user)
+      end
+    end
+
+    def clear_emoji_cache
+      log "Clearing emoji cache..."
+      Emoji.clear_cache
     end
 
     def extract_uploads
-      if `tar --list --file #{@tar_filename} | grep 'uploads/'`.present?
+      if system('tar', '--exclude=*/*', '--list', '--file', @tar_filename, 'uploads')
         log "Extracting uploads..."
-        FileUtils.cd(File.join(Rails.root, "public")) do
-          `tar --extract --keep-newer-files --file #{@tar_filename} uploads/`
+
+        FileUtils.cd(@tmp_directory) do
+          Discourse::Utils.execute_command(
+            'tar', '--extract', '--keep-newer-files', '--file', @tar_filename, 'uploads/',
+            failure_message: "Failed to extract uploads."
+          )
         end
+
+        public_uploads_path = File.join(Rails.root, "public")
+
+        FileUtils.cd(public_uploads_path) do
+          FileUtils.mkdir_p("uploads")
+
+          tmp_uploads_path = Dir.glob(File.join(@tmp_directory, "uploads", "*")).first
+          previous_db_name = File.basename(tmp_uploads_path)
+          current_db_name = RailsMultisite::ConnectionManagement.current_db
+          optimized_images_exist = File.exist?(File.join(tmp_uploads_path, 'optimized'))
+
+          Discourse::Utils.execute_command(
+            'rsync', '-avp', '--safe-links', "#{tmp_uploads_path}/", "uploads/#{current_db_name}/",
+            failure_message: "Failed to restore uploads."
+          )
+
+          if previous_db_name != current_db_name
+            log "Remapping uploads..."
+            DbHelper.remap("uploads/#{previous_db_name}", "uploads/#{current_db_name}")
+          end
+
+          generate_optimized_images unless optimized_images_exist
+        end
+      end
+    end
+
+    def generate_optimized_images
+      log 'Posts will be rebaked by a background job in sidekiq. You will see missing images until that has completed.'
+      log 'You can expedite the process by manually running "rake posts:rebake_uncooked_posts"'
+
+      DB.exec("TRUNCATE TABLE optimized_images")
+      DB.exec(<<~SQL)
+        UPDATE posts
+        SET baked_version = NULL
+        WHERE id IN (SELECT post_id FROM post_uploads)
+      SQL
+
+      User.where("uploaded_avatar_id IS NOT NULL").find_each do |user|
+        Jobs.enqueue(:create_avatar_thumbnails, upload_id: user.uploaded_avatar_id, user_id: user.id)
       end
     end
 
@@ -287,16 +478,18 @@ module BackupRestore
     end
 
     def notify_user
-      if user = User.find_by(email: @user_info[:email])
+      if user = User.find_by_email(@user_info[:email])
         log "Notifying '#{user.username}' of the end of the restore..."
-        if @success
-          SystemMessage.create_from_system_user(user, :restore_succeeded)
-        else
-          SystemMessage.create_from_system_user(user, :restore_failed, logs: @logs.join("\n"))
-        end
+        status = @success ? :restore_succeeded : :restore_failed
+
+        SystemMessage.create_from_system_user(user, status,
+          logs: Discourse::Utils.pretty_logs(@logs)
+        )
       else
         log "Could not send notification to '#{@user_info[:username]}' (#{@user_info[:email]}), because the user does not exists..."
       end
+    rescue => ex
+      log "Something went wrong while notifying user.", ex
     end
 
     def clean_up
@@ -305,32 +498,41 @@ module BackupRestore
       unpause_sidekiq
       disable_readonly_mode if Discourse.readonly_mode?
       mark_restore_as_not_running
-      log "Finished!"
     end
 
     def remove_tmp_directory
       log "Removing tmp '#{@tmp_directory}' directory..."
       FileUtils.rm_rf(@tmp_directory) if Dir[@tmp_directory].present?
-    rescue
-      log "Something went wrong while removing the following tmp directory: #{@tmp_directory}"
+    rescue => ex
+      log "Something went wrong while removing the following tmp directory: #{@tmp_directory}", ex
     end
 
     def unpause_sidekiq
       log "Unpausing sidekiq..."
       Sidekiq.unpause!
-    rescue
-      log "Something went wrong while unpausing Sidekiq."
+    rescue => ex
+      log "Something went wrong while unpausing Sidekiq.", ex
+    end
+
+    def clear_theme_cache
+      log "Clear theme cache"
+      ThemeField.force_recompilation!
+      Theme.expire_site_cache!
     end
 
     def disable_readonly_mode
       return if @readonly_mode_was_enabled
       log "Disabling readonly mode..."
       Discourse.disable_readonly_mode
+    rescue => ex
+      log "Something went wrong while disabling readonly mode.", ex
     end
 
     def mark_restore_as_not_running
       log "Marking restore as finished..."
       BackupRestore.mark_as_not_running!
+    rescue => ex
+      log "Something went wrong while marking restore as finished.", ex
     end
 
     def ensure_directory_exists(directory)
@@ -338,20 +540,27 @@ module BackupRestore
       FileUtils.mkdir_p(directory)
     end
 
-    def log(message)
-      puts(message) rescue nil
-      publish_log(message) rescue nil
-      save_log(message)
+    def after_restore_hook
+      log "Executing the after_restore_hook..."
+      DiscourseEvent.trigger(:restore_complete)
     end
 
-    def publish_log(message)
+    def log(message, ex = nil)
+      timestamp = Time.now.strftime("%Y-%m-%d %H:%M:%S")
+      puts(message)
+      publish_log(message, timestamp)
+      save_log(message, timestamp)
+      Rails.logger.error("#{ex}\n" + ex.backtrace.join("\n")) if ex
+    end
+
+    def publish_log(message, timestamp)
       return unless @publish_to_message_bus
-      data = { timestamp: Time.now, operation: "restore", message: message }
-      MessageBus.publish(BackupRestore::LOGS_CHANNEL, data, user_ids: [@user_id])
+      data = { timestamp: timestamp, operation: "restore", message: message }
+      MessageBus.publish(BackupRestore::LOGS_CHANNEL, data, user_ids: [@user_id], client_ids: [@client_id])
     end
 
-    def save_log(message)
-      @logs << "[#{Time.now}] #{message}"
+    def save_log(message, timestamp)
+      @logs << "[#{timestamp}] #{message}"
     end
 
   end

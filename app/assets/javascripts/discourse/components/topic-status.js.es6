@@ -1,45 +1,71 @@
-import StringBuffer from 'discourse/mixins/string-buffer';
+import { iconHTML } from "discourse-common/lib/icon-library";
+import { bufferedRender } from "discourse-common/lib/buffered-render";
+import { escapeExpression } from "discourse/lib/utilities";
 
-export default Ember.Component.extend(StringBuffer, {
-  classNames: ['topic-statuses'],
+export default Ember.Component.extend(
+  bufferedRender({
+    classNames: ["topic-statuses"],
 
-  rerenderTriggers: ['topic.archived', 'topic.closed', 'topic.pinned', 'topic.visible', 'topic.unpinned', 'topic.is_warning'],
+    rerenderTriggers: [
+      "topic.archived",
+      "topic.closed",
+      "topic.pinned",
+      "topic.visible",
+      "topic.unpinned",
+      "topic.is_warning"
+    ],
 
-  click: function() {
-    var topic = this.get('topic');
+    click(e) {
+      // only pin unpin for now
+      if (this.get("canAct") && $(e.target).hasClass("d-icon-thumbtack")) {
+        const topic = this.get("topic");
+        topic.get("pinned") ? topic.clearPin() : topic.rePin();
+      }
 
-    // only pin unpin for now
-    if (topic.get('pinned')) {
-      topic.clearPin();
-    } else {
-      topic.rePin();
+      return false;
+    },
+
+    canAct: function() {
+      return Discourse.User.current() && !this.get("disableActions");
+    }.property("disableActions"),
+
+    buildBuffer(buffer) {
+      const renderIcon = function(name, key, actionable) {
+        const title = escapeExpression(I18n.t(`topic_statuses.${key}.help`)),
+          startTag = actionable ? "a href" : "span",
+          endTag = actionable ? "a" : "span",
+          iconArgs = key === "unpinned" ? { class: "unpinned" } : null,
+          icon = iconHTML(name, iconArgs);
+
+        buffer.push(
+          `<${startTag} title='${title}' class='topic-status'>${icon}</${endTag}>`
+        );
+      };
+
+      const renderIconIf = (conditionProp, name, key, actionable) => {
+        if (!this.get(conditionProp)) {
+          return;
+        }
+        renderIcon(name, key, actionable);
+      };
+
+      renderIconIf("topic.is_warning", "envelope", "warning");
+
+      if (this.get("topic.closed") && this.get("topic.archived")) {
+        renderIcon("lock", "locked_and_archived");
+      } else {
+        renderIconIf("topic.closed", "lock", "locked");
+        renderIconIf("topic.archived", "lock", "archived");
+      }
+
+      renderIconIf("topic.pinned", "thumbtack", "pinned", this.get("canAct"));
+      renderIconIf(
+        "topic.unpinned",
+        "thumbtack",
+        "unpinned",
+        this.get("canAct")
+      );
+      renderIconIf("topic.invisible", "far-eye-slash", "unlisted");
     }
-
-    return false;
-  },
-
-  canAct: function() {
-    return Discourse.User.current() && !this.get('disableActions');
-  }.property('disableActions'),
-
-  renderString: function(buffer) {
-
-    var self = this;
-
-    var renderIconIf = function(conditionProp, name, key, actionable) {
-      if (!self.get(conditionProp)) { return; }
-      var title = Handlebars.Utils.escapeExpression(I18n.t("topic_statuses." + key + ".help"));
-      var startTag = actionable ? "a href" : "span";
-      var endTag = actionable ? "a" : "span";
-
-      buffer.push("<" + startTag + " title='" + title + "' class='topic-status'><i class='fa fa-" + name + "'></i></" + endTag + ">");
-    };
-
-    renderIconIf('topic.is_warning', 'envelope', 'warning');
-    renderIconIf('topic.closed', 'lock', 'locked');
-    renderIconIf('topic.archived', 'lock', 'archived');
-    renderIconIf('topic.pinned', 'thumb-tack', 'pinned', self.get("canAct") );
-    renderIconIf('topic.unpinned', 'thumb-tack unpinned', 'unpinned', self.get("canAct"));
-    renderIconIf('topic.invisible', 'eye-slash', 'invisible');
-  }
-});
+  })
+);

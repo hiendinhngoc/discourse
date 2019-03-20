@@ -1,7 +1,12 @@
-import ShowFooter from "discourse/mixins/show-footer";
-
-export default Discourse.Route.extend(ShowFooter, {
-  serialize: function() {
+export default Discourse.Route.extend({
+  serialize() {
     return "";
+  },
+
+  actions: {
+    didTransition() {
+      this.controllerFor("application").set("showFooter", true);
+      return true;
+    }
   }
 });

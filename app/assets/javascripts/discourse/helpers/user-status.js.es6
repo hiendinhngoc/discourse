@@ -1,20 +1,26 @@
-import registerUnbound from 'discourse/helpers/register-unbound';
+import { iconHTML } from "discourse-common/lib/icon-library";
+import { htmlHelper } from "discourse-common/lib/helpers";
+import { escapeExpression } from "discourse/lib/utilities";
 
-var safe = Handlebars.SafeString;
-
-registerUnbound('user-status', function(user) {
-  if (!user) { return; }
-
-  var name = Handlebars.Utils.escapeExpression(user.get('name'));
-
-  if(Discourse.User.currentProp("admin") || Discourse.User.currentProp("moderator")) {
-    if(user.get('admin')) {
-      var adminDesc = I18n.t('user.admin', {user: name});
-      return new safe('<i class="fa fa-shield" title="' + adminDesc +  '" alt="' + adminDesc + '"></i>');
-    }
+export default htmlHelper((user, args) => {
+  if (!user) {
+    return;
   }
-  if(user.get('moderator')){
-    var modDesc = I18n.t('user.moderator', {user: name});
-    return new safe('<i class="fa fa-shield" title="' + modDesc +  '" alt="' + modDesc + '"></i>');
+
+  const name = escapeExpression(user.get("name"));
+  let currentUser;
+  if (args && args.hash) {
+    currentUser = args.hash.currentUser;
+  }
+
+  if (currentUser && user.get("admin") && currentUser.get("staff")) {
+    return iconHTML("shield-alt", {
+      label: I18n.t("user.admin", { user: name })
+    });
+  }
+  if (user.get("moderator")) {
+    return iconHTML("shield-alt", {
+      label: I18n.t("user.moderator", { user: name })
+    });
   }
 });

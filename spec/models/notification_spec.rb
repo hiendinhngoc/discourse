@@ -1,8 +1,8 @@
-require 'spec_helper'
+require 'rails_helper'
 
 describe Notification do
   before do
-    ActiveRecord::Base.observers.enable :all
+    NotificationEmailer.enable
   end
 
   it { is_expected.to validate_presence_of :notification_type }
@@ -11,10 +11,26 @@ describe Notification do
   it { is_expected.to belong_to :user }
   it { is_expected.to belong_to :topic }
 
+  describe '#types' do
+    context "verify enum sequence" do
+      before do
+        @types = Notification.types
+      end
+
+      it "'mentioned' should be at 1st position" do
+        expect(@types[:mentioned]).to eq(1)
+      end
+
+      it "'group_mentioned' should be at 15th position" do
+        expect(@types[:group_mentioned]).to eq(15)
+      end
+    end
+  end
+
   describe 'post' do
     let(:topic) { Fabricate(:topic) }
     let(:post_args) do
-      {user: topic.user, topic: topic}
+      { user: topic.user, topic: topic }
     end
 
     let(:coding_horror) { Fabricate(:coding_horror) }
@@ -27,7 +43,6 @@ describe Notification do
       let(:post) {
         process_alerts(Fabricate(:post, post_args.merge(raw: "Hello @CodingHorror")))
       }
-
 
       it 'notifies the poster on reply' do
         expect {
@@ -69,6 +84,7 @@ describe Notification do
     end
 
   end
+
   describe 'unread counts' do
 
     let(:user) { Fabricate(:user) }
@@ -111,30 +127,13 @@ describe Notification do
     end
 
     context 'destroy' do
-
       let!(:notification) { Fabricate(:notification) }
 
       it 'updates the notification count on destroy' do
         Notification.any_instance.expects(:refresh_notification_count).returns(nil)
-        notification.destroy
+        notification.destroy!
       end
 
-    end
-  end
-
-  describe '@mention' do
-
-    it "calls email_user_mentioned on creating a notification" do
-      UserEmailObserver.any_instance.expects(:after_commit).with(instance_of(Notification))
-      Fabricate(:notification)
-    end
-
-  end
-
-  describe '@mention' do
-    it "calls email_user_quoted on creating a quote notification" do
-      UserEmailObserver.any_instance.expects(:after_commit).with(instance_of(Notification))
-      Fabricate(:quote_notification)
     end
   end
 
@@ -142,8 +141,11 @@ describe Notification do
     before do
       @topic = Fabricate(:private_message_topic)
       @post = Fabricate(:post, topic: @topic, user: @topic.user)
+      @target = @post.topic.topic_allowed_users.reject { |a| a.user_id == @post.user_id }[0].user
+
+      TopicUser.change(@target.id, @topic.id, notification_level: TopicUser.notification_levels[:watching])
+
       PostAlerter.post_created(@post)
-      @target = @post.topic.topic_allowed_users.reject{|a| a.user_id == @post.user_id}[0].user
     end
 
     it 'should create and rollup private message notifications' do
@@ -155,7 +157,6 @@ describe Notification do
       Fabricate(:post, topic: @topic, user: @topic.user)
       @target.reload
       expect(@target.unread_private_messages).to eq(1)
-
     end
 
   end
@@ -187,20 +188,21 @@ describe Notification do
     it 'correctly updates the read state' do
       user = Fabricate(:user)
 
+      t = Fabricate(:topic)
+
       Notification.create!(read: false,
                            user_id: user.id,
-                           topic_id: 2,
+                           topic_id: t.id,
                            post_number: 1,
                            data: '{}',
                            notification_type: Notification.types[:private_message])
 
       other = Notification.create!(read: false,
-                           user_id: user.id,
-                           topic_id: 2,
-                           post_number: 1,
-                           data: '{}',
-                           notification_type: Notification.types[:mentioned])
-
+                                   user_id: user.id,
+                                   topic_id: t.id,
+                                   post_number: 1,
+                                   data: '{}',
+                                   notification_type: Notification.types[:mentioned])
 
       user.saw_notification_id(other.id)
       user.reload
@@ -220,15 +222,15 @@ describe Notification do
       end
       Notification.create!(read: true, user_id: user.id, topic_id: 2, post_number: 4, data: '{}', notification_type: 1)
 
-      expect(Notification.mark_posts_read(user,2,[1,2,3,4])).to eq(3)
+      expect { Notification.mark_posts_read(user, 2, [1, 2, 3, 4]) }.to change { Notification.where(read: true).count }.by(3)
     end
   end
-
 
   describe 'ensure consistency' do
     it 'deletes notifications if post is missing or deleted' do
 
-      ActiveRecord::Base.observers.disable :all
+      NotificationEmailer.disable
+
       p = Fabricate(:post)
       p2 = Fabricate(:post)
 
@@ -248,13 +250,43 @@ describe Notification do
     end
   end
 
+  describe '.filter_by_display_username_and_type' do
+    let(:post) { Fabricate(:post) }
+    let(:user) { Fabricate(:user) }
+
+    before do
+      PostActionNotifier.enable
+    end
+
+    it 'should return the right notifications' do
+      expect(Notification.filter_by_display_username_and_type(
+        user.username_lower, Notification.types[:liked]
+      )).to eq([])
+
+      expect do
+        PostAlerter.post_created(Fabricate(:basic_reply,
+          user: user,
+          topic: post.topic
+        ))
+
+        PostAction.act(user, post, PostActionType.types[:like])
+      end.to change { Notification.count }.by(2)
+
+      expect(Notification.filter_by_display_username_and_type(
+        user.username_lower, Notification.types[:liked]
+      )).to contain_exactly(
+        Notification.find_by(notification_type: Notification.types[:liked])
+      )
+    end
+  end
+
 end
 
 # pulling this out cause I don't want an observer
 describe Notification do
   describe '#recent_report' do
-    let(:user){ Fabricate(:user) }
-    let(:post){ Fabricate(:post) }
+    let(:user) { Fabricate(:user) }
+    let(:post) { Fabricate(:post) }
 
     def fab(type, read)
       @i ||= 0
@@ -275,6 +307,17 @@ describe Notification do
       fab(Notification.types[:liked], true)
     end
 
+    def liked_consolidated
+      fab(Notification.types[:liked_consolidated], true)
+    end
+
+    it 'correctly finds visible notifications' do
+      pm
+      expect(Notification.visible.count).to eq(1)
+      post.topic.trash!
+      expect(Notification.visible.count).to eq(0)
+    end
+
     it 'orders stuff correctly' do
       a = unread_pm
           regular
@@ -284,8 +327,25 @@ describe Notification do
       # bumps unread pms to front of list
 
       notifications = Notification.recent_report(user, 3)
-      expect(notifications.map{|n| n.id}).to eq([a.id, d.id, c.id])
+      expect(notifications.map { |n| n.id }).to eq([a.id, d.id, c.id])
 
+    end
+
+    describe 'for a user that does not want to be notify on liked' do
+      before do
+        user.user_option.update!(
+          like_notification_frequency:
+            UserOption.like_notification_frequency_type[:never]
+        )
+      end
+
+      it "should not return any form of liked notifications" do
+        notification = pm
+        regular
+        liked_consolidated
+
+        expect(Notification.recent_report(user)).to contain_exactly(notification)
+      end
     end
   end
 end

@@ -1,91 +1,189 @@
-import ModalFunctionality from 'discourse/mixins/modal-functionality';
+import ModalFunctionality from "discourse/mixins/modal-functionality";
+
+const _buttons = [];
+
+const alwaysTrue = () => true;
+
+function identity() {}
+
+function addBulkButton(action, key, opts) {
+  opts = opts || {};
+
+  const btn = {
+    action,
+    label: `topics.bulk.${key}`,
+    icon: opts.icon,
+    buttonVisible: opts.buttonVisible || alwaysTrue,
+    class: opts.class
+  };
+
+  _buttons.push(btn);
+}
+
+// Default buttons
+addBulkButton("showChangeCategory", "change_category", {
+  icon: "pencil-alt",
+  class: "btn-default"
+});
+addBulkButton("closeTopics", "close_topics", {
+  icon: "lock",
+  class: "btn-default"
+});
+addBulkButton("archiveTopics", "archive_topics", {
+  icon: "folder",
+  class: "btn-default"
+});
+addBulkButton("showNotificationLevel", "notification_level", {
+  icon: "d-regular",
+  class: "btn-default"
+});
+addBulkButton("resetRead", "reset_read", {
+  icon: "backward",
+  class: "btn-default"
+});
+addBulkButton("unlistTopics", "unlist_topics", {
+  icon: "far-eye-slash",
+  class: "btn-default",
+  buttonVisible: topics => topics.some(t => t.visible)
+});
+addBulkButton("relistTopics", "relist_topics", {
+  icon: "far-eye",
+  class: "btn-default",
+  buttonVisible: topics => topics.some(t => !t.visible)
+});
+if (Discourse.SiteSettings.tagging_enabled) {
+  addBulkButton("showTagTopics", "change_tags", {
+    icon: "tag",
+    class: "btn-default"
+  });
+  addBulkButton("showAppendTagTopics", "append_tags", {
+    icon: "tag",
+    class: "btn-default"
+  });
+}
+addBulkButton("deleteTopics", "delete", { icon: "trash", class: "btn-danger" });
 
 // Modal for performing bulk actions on topics
-export default Ember.ArrayController.extend(ModalFunctionality, {
-  needs: ['discovery/topics'],
+export default Ember.Controller.extend(ModalFunctionality, {
+  tags: null,
 
-  onShow: function() {
-    this.set('controllers.modal.modalClass', 'topic-bulk-actions-modal small');
+  emptyTags: Ember.computed.empty("tags"),
+  categoryId: Ember.computed.alias("model.category.id"),
+
+  onShow() {
+    const topics = this.get("model.topics");
+    // const relistButtonIndex = _buttons.findIndex(b => b.action === 'relistTopics');
+
+    this.set("buttons", _buttons.filter(b => b.buttonVisible(topics)));
+    this.set("modal.modalClass", "topic-bulk-actions-modal small");
+    this.send("changeBulkTemplate", "modal/bulk-actions-buttons");
   },
 
-  perform: function(operation) {
-    this.set('loading', true);
+  perform(operation) {
+    this.set("loading", true);
 
-    var self = this,
-        topics = this.get('model');
-    return Discourse.Topic.bulkOperation(this.get('model'), operation).then(function(result) {
-      self.set('loading', false);
-      if (result && result.topic_ids) {
-        return result.topic_ids.map(function (t) {
-          return topics.findBy('id', t);
-        });
-      }
-      return result;
-    }).catch(function() {
-      bootbox.alert(I18n.t('generic_error'));
-      self.set('loading', false);
-    });
+    const topics = this.get("model.topics");
+    return Discourse.Topic.bulkOperation(topics, operation)
+      .then(result => {
+        this.set("loading", false);
+        if (result && result.topic_ids) {
+          return result.topic_ids.map(t => topics.findBy("id", t));
+        }
+        return result;
+      })
+      .catch(() => {
+        bootbox.alert(I18n.t("generic_error"));
+        this.set("loading", false);
+      });
   },
 
-  forEachPerformed: function(operation, cb) {
-    var self = this;
-    this.perform(operation).then(function (topics) {
+  forEachPerformed(operation, cb) {
+    this.perform(operation).then(topics => {
       if (topics) {
         topics.forEach(cb);
-        self.send('closeModal');
+        (this.get("refreshClosure") || identity)();
+        this.send("closeModal");
       }
     });
   },
 
-  performAndRefresh: function(operation) {
-    var self = this;
-    return this.perform(operation).then(function() {
-      self.get('controllers.discovery/topics').send('refresh');
-      self.send('closeModal');
+  performAndRefresh(operation) {
+    return this.perform(operation).then(() => {
+      (this.get("refreshClosure") || identity)();
+      this.send("closeModal");
     });
   },
 
   actions: {
-    showChangeCategory: function() {
-      this.send('changeBulkTemplate', 'modal/bulk_change_category');
-      this.set('controllers.modal.modalClass', 'topic-bulk-actions-modal full');
+    showTagTopics() {
+      this.set("tags", "");
+      this.set("action", "changeTags");
+      this.set("label", "change_tags");
+      this.set("title", "choose_new_tags");
+      this.send("changeBulkTemplate", "bulk-tag");
     },
 
-    showNotificationLevel: function() {
-      this.send('changeBulkTemplate', 'modal/bulk_notification_level');
+    changeTags() {
+      this.performAndRefresh({ type: "change_tags", tags: this.get("tags") });
     },
 
-    deleteTopics: function() {
-      this.performAndRefresh({type: 'delete'});
+    showAppendTagTopics() {
+      this.set("tags", "");
+      this.set("action", "appendTags");
+      this.set("label", "append_tags");
+      this.set("title", "choose_append_tags");
+      this.send("changeBulkTemplate", "bulk-tag");
     },
 
-    closeTopics: function() {
-      this.forEachPerformed({type: 'close'}, function(t) {
-        t.set('closed', true);
-      });
+    appendTags() {
+      this.performAndRefresh({ type: "append_tags", tags: this.get("tags") });
     },
 
-    archiveTopics: function() {
-      this.forEachPerformed({type: 'archive'}, function(t) {
-        t.set('archived', true);
-      });
+    showChangeCategory() {
+      this.send("changeBulkTemplate", "modal/bulk-change-category");
     },
 
-    changeCategory: function() {
-      var categoryId = parseInt(this.get('newCategoryId'), 10) || 0,
-          category = Discourse.Category.findById(categoryId),
-          self = this;
-      this.perform({type: 'change_category', category_id: categoryId}).then(function(topics) {
-        topics.forEach(function(t) {
-          t.set('category', category);
-        });
-        self.get('controllers.discovery/topics').send('refresh');
-        self.send('closeModal');
-      });
+    showNotificationLevel() {
+      this.send("changeBulkTemplate", "modal/bulk-notification-level");
     },
 
-    resetRead: function() {
-      this.performAndRefresh({ type: 'reset_read' });
+    deleteTopics() {
+      this.performAndRefresh({ type: "delete" });
+    },
+
+    closeTopics() {
+      this.forEachPerformed({ type: "close" }, t => t.set("closed", true));
+    },
+
+    archiveTopics() {
+      this.forEachPerformed({ type: "archive" }, t => t.set("archived", true));
+    },
+
+    unlistTopics() {
+      this.forEachPerformed({ type: "unlist" }, t => t.set("visible", false));
+    },
+
+    relistTopics() {
+      this.forEachPerformed({ type: "relist" }, t => t.set("visible", true));
+    },
+
+    changeCategory() {
+      const categoryId = parseInt(this.get("newCategoryId"), 10) || 0;
+      const category = Discourse.Category.findById(categoryId);
+
+      this.perform({ type: "change_category", category_id: categoryId }).then(
+        topics => {
+          topics.forEach(t => t.set("category", category));
+          (this.get("refreshClosure") || identity)();
+          this.send("closeModal");
+        }
+      );
+    },
+
+    resetRead() {
+      this.performAndRefresh({ type: "reset_read" });
     }
   }
 });
+
+export { addBulkButton };

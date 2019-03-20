@@ -12,7 +12,7 @@ module TopicListResponder
       format.html do
         @list = list
         store_preloaded(list.preload_key, MultiJson.dump(TopicListSerializer.new(list, scope: guardian)))
-        render 'list'
+        render 'list/list'
       end
       format.json do
         render_serialized(list, TopicListSerializer)
@@ -21,4 +21,3 @@ module TopicListResponder
   end
 
 end
-

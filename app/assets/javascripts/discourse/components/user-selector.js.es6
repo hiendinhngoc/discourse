@@ -1,63 +1,127 @@
-import TextField from 'discourse/components/text-field';
-import userSearch from 'discourse/lib/user-search';
+import { observes } from "ember-addons/ember-computed-decorators";
+import TextField from "discourse/components/text-field";
+import userSearch from "discourse/lib/user-search";
+import { findRawTemplate } from "discourse/lib/raw-templates";
 
 export default TextField.extend({
+  autocorrect: false,
+  autocapitalize: false,
+  name: "user-selector",
 
-  _initializeAutocomplete: function() {
+  @observes("usernames")
+  _update() {
+    if (this.get("canReceiveUpdates") === "true")
+      this.didInsertElement({ updateData: true });
+  },
+
+  didInsertElement(opts) {
+    this._super(...arguments);
+
+    const bool = n => {
+      const val = this.get(n);
+      return val === true || val === "true";
+    };
+
     var self = this,
-        selected = [],
-        currentUser = this.currentUser,
-        includeGroups = this.get('includeGroups') === 'true';
+      selected = [],
+      groups = [],
+      currentUser = this.currentUser,
+      includeMentionableGroups = bool("includeMentionableGroups"),
+      includeMessageableGroups = bool("includeMessageableGroups"),
+      includeGroups = bool("includeGroups"),
+      allowedUsers = bool("allowedUsers"),
+      excludeCurrentUser = bool("excludeCurrentUser"),
+      single = bool("single"),
+      allowAny = bool("allowAny"),
+      disabled = bool("disabled"),
+      allowEmails = bool("allowEmails"),
+      fullWidthWrap = bool("fullWidthWrap");
 
     function excludedUsernames() {
-      if (currentUser && self.get('excludeCurrentUser')) {
-        return selected.concat([currentUser.get('username')]);
+      // hack works around some issues with allowAny eventing
+      const usernames = single ? [] : selected;
+
+      if (currentUser && excludeCurrentUser) {
+        return usernames.concat([currentUser.get("username")]);
       }
-      return selected;
+      return usernames;
     }
 
-    var template = this.container.lookup('template:user-selector-autocomplete.raw');
-    $(this.get('element')).val(this.get('usernames')).autocomplete({
-      template: template,
+    this.$()
+      .val(this.get("usernames"))
+      .autocomplete({
+        template: findRawTemplate("user-selector-autocomplete"),
+        disabled: disabled,
+        single: single,
+        allowAny: allowAny,
+        updateData: opts && opts.updateData ? opts.updateData : false,
+        fullWidthWrap,
 
-      disabled: this.get('disabled'),
-      single: this.get('single'),
-      allowAny: this.get('allowAny'),
-
-      dataSource: function(term) {
-        term = term.replace(/[^a-zA-Z0-9_]/, '');
-        return userSearch({
-          term: term,
-          topicId: self.get('topicId'),
-          exclude: excludedUsernames(),
-          includeGroups: includeGroups
-        });
-      },
-
-      transformComplete: function(v) {
-        if (v.username) {
-          return v.username;
-        } else {
-          var excludes = excludedUsernames();
-          return v.usernames.filter(function(item){
-            return excludes.indexOf(item) === -1;
+        dataSource(term) {
+          var results = userSearch({
+            term,
+            topicId: self.get("topicId"),
+            exclude: excludedUsernames(),
+            includeGroups,
+            allowedUsers,
+            includeMentionableGroups,
+            includeMessageableGroups,
+            group: self.get("group"),
+            allowEmails
           });
+          return results;
+        },
+
+        transformComplete(v) {
+          if (v.username || v.name) {
+            if (!v.username) {
+              groups.push(v.name);
+            }
+            return v.username || v.name;
+          } else {
+            var excludes = excludedUsernames();
+            return v.usernames.filter(function(item) {
+              return excludes.indexOf(item) === -1;
+            });
+          }
+        },
+
+        onChangeItems(items) {
+          var hasGroups = false;
+          items = items.map(function(i) {
+            if (groups.indexOf(i) > -1) {
+              hasGroups = true;
+            }
+            return i.username ? i.username : i;
+          });
+          self.set("usernames", items.join(","));
+          self.set("hasGroups", hasGroups);
+
+          selected = items;
+          if (self.get("onChangeCallback")) self.onChangeCallback();
+        },
+
+        reverseTransform(i) {
+          return { username: i };
         }
-      },
+      });
+  },
 
-      onChangeItems: function(items) {
-        items = items.map(function(i) {
-          return i.username ? i.username : i;
-        });
-        self.set('usernames', items.join(","));
-        selected = items;
-      },
+  willDestroyElement() {
+    this._super(...arguments);
+    this.$().autocomplete("destroy");
+  },
 
-      reverseTransform: function(i) {
-        return { username: i };
+  // THIS IS A HUGE HACK TO SUPPORT CLEARING THE INPUT
+  @observes("usernames")
+  _clearInput: function() {
+    if (arguments.length > 1) {
+      if (Ember.isEmpty(this.get("usernames"))) {
+        this.$()
+          .parent()
+          .find("a")
+          .click();
       }
-
-    });
-  }.on('didInsertElement')
-
+    }
+  }
 });

@@ -1,4 +1,4 @@
-require 'spec_helper'
+require 'rails_helper'
 require 'pinned_check'
 
 describe PinnedCheck do
@@ -50,8 +50,6 @@ describe PinnedCheck do
       end
     end
 
-
   end
 
 end
-

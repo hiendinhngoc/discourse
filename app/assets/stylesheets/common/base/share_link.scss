@@ -3,17 +3,17 @@
 #share-link {
   position: absolute;
   left: 20px;
-  z-index: 1200;
-  box-shadow: 0 1px 5px rgba(0,0,0, .4);
+  z-index: z("dropdown");
+  box-shadow: shadow("card");
   background-color: $secondary;
-  padding: 6px 10px 10px 10px;
+  padding: s(2 2 1 2);
   width: 300px;
   display: none;
   &.visible {
     display: block;
   }
-  input[type=text] {
-    width: 96%;
+  input[type="text"] {
+    width: 100%;
   }
   .share-for-touch .overflow-ellipsis {
     clear: both;
@@ -21,38 +21,60 @@
   .share-for-touch {
     margin: 14px 0;
   }
-  h3 {
-    font-size: 0.929em;
-  }
-  .social-link {
-    margin-left: 2px;
-    margin-right: 8px;
-    float: left;
-    font-size: 1.571em;
-  }
-  .link {
-    margin-right: 2px;
-    float: right;
-    font-size: 1.429em;
-    a {
-      color: $primary;
+
+  .title {
+    margin-bottom: s(1);
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+
+    h3 {
+      font-size: $font-0;
+      margin: 0;
+    }
+
+    .date {
+      font-weight: normal;
+      color: dark-light-choose($primary-medium, $secondary-medium);
     }
   }
 
-  h3 {
-    margin: 5px 0;
-    float: left;
+  .copy-text {
+    display: inline-block;
+    position: absolute;
+    margin: 5px 5px 5px 15px;
+    color: $success;
+    opacity: 1;
+    transition: opacity 0.25s;
+    font-size: $font-0;
+    &:not(.success) {
+      opacity: 0;
+    }
+  }
+  .social-link {
+    margin-right: s(2);
+    font-size: $font-up-4;
+  }
+  .link {
+    font-size: $font-up-3;
+    a {
+      color: dark-light-choose($primary-medium, $secondary-medium);
+    }
   }
 
-  .date {
-    float: right;
-    margin: 5px;
-    color: scale-color($primary, $lightness: 50%);
+  input[type="text"] {
+    font-size: $font-up-1;
+    margin-bottom: 0;
   }
 
-  input[type=text] {
-    font-size: 1.143em;
-    margin-bottom: 10px;
+  .actions {
+    display: flex;
+    align-items: center;
+    margin-top: s(2);
+
+    .link {
+      margin-left: auto;
+    }
   }
 }
 
@@ -60,6 +82,6 @@
   display: none;
 }
 
-.discourse-touch #share-link input[type=text] {
+.discourse-touch #share-link input[type="text"] {
   display: none;
 }

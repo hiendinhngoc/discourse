@@ -1,10 +1,12 @@
 class NotificationSerializer < ApplicationSerializer
 
-  attributes :notification_type,
+  attributes :id,
+             :notification_type,
              :read,
              :created_at,
              :post_number,
              :topic_id,
+             :fancy_title,
              :slug,
              :data,
              :is_warning
@@ -15,6 +17,14 @@ class NotificationSerializer < ApplicationSerializer
 
   def is_warning
     object.topic.present? && object.topic.subtype == TopicSubtype.moderator_warning
+  end
+
+  def include_fancy_title?
+    object.topic&.fancy_title
+  end
+
+  def fancy_title
+    object.topic.fancy_title
   end
 
   def include_is_warning?

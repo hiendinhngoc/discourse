@@ -1,11 +1,14 @@
-<div class='admin-controls'>
-  <div class='span15'>
-    <ul class="nav nav-pills">
-      <li>{{#link-to 'adminFlags.list' 'active'}}{{i18n 'admin.flags.active'}}{{/link-to}}</li>
-      <li>{{#link-to 'adminFlags.list' 'old'}}{{i18n 'admin.flags.old'}}{{/link-to}}</li>
-    </ul>
-  </div>
-</div>
+{{#admin-nav}}
+  {{#if siteSettings.flags_default_topics}}
+    {{nav-item route='adminFlags.topics' label='admin.flags.topics'}}
+    {{nav-item route='adminFlags.postsActive' label='admin.flags.active_posts'}}
+  {{else}}
+    {{nav-item route='adminFlags.postsActive' label='admin.flags.active_posts'}}
+    {{nav-item route='adminFlags.topics' label='admin.flags.topics'}}
+  {{/if}}
+
+  {{nav-item route='adminFlags.postsOld' label='admin.flags.old_posts' class='right'}}
+{{/admin-nav}}
 
 <div class="admin-container">
   {{outlet}}

@@ -1,4 +1,4 @@
-require 'spec_helper'
+require 'rails_helper'
 
 describe PostTiming do
 
@@ -28,16 +28,16 @@ describe PostTiming do
     end
 
     it 'works correctly' do
-      timing(1,1)
-      timing(2,1)
-      timing(2,2)
-      timing(3,1)
-      timing(3,2)
-      timing(3,3)
+      timing(1, 1)
+      timing(2, 1)
+      timing(2, 2)
+      timing(3, 1)
+      timing(3, 2)
+      timing(3, 3)
 
-      _tu_one = topic_user(1,1,1)
-      _tu_two = topic_user(2,2,2)
-      _tu_three = topic_user(3,3,3)
+      _tu_one = topic_user(1, 1, 1)
+      _tu_two = topic_user(2, 2, 2)
+      _tu_three = topic_user(3, 3, 3)
 
       PostTiming.pretend_read(topic_id, 2, 3)
 
@@ -60,28 +60,74 @@ describe PostTiming do
     end
   end
 
+  describe 'safeguard' do
+    it "doesn't store timings that are larger than the account lifetime" do
+      user = Fabricate(:user, created_at: 3.minutes.ago)
+      post = Fabricate(:post)
+
+      PostTiming.process_timings(user, post.topic_id, 1, [[post.post_number, 123]])
+      msecs = PostTiming.where(post_number: post.post_number, user_id: user.id).pluck(:msecs)[0]
+      expect(msecs).to eq(123)
+
+      PostTiming.process_timings(user, post.topic_id, 1, [[post.post_number, 10.minutes.to_i * 1000]])
+      msecs = PostTiming.where(post_number: post.post_number, user_id: user.id).pluck(:msecs)[0]
+      expect(msecs).to eq(123 + PostTiming::MAX_READ_TIME_PER_BATCH)
+    end
+
+  end
+
   describe 'process_timings' do
 
-    # integration test
+    # integration tests
 
     it 'processes timings correctly' do
-
-      ActiveRecord::Base.observers.enable :all
+      PostActionNotifier.enable
 
       post = Fabricate(:post)
-      user2 = Fabricate(:coding_horror)
+      (2..5).each do |i|
+        Fabricate(:post, topic: post.topic, post_number: i)
+      end
+      user2 = Fabricate(:coding_horror, created_at: 1.day.ago)
 
       PostAction.act(user2, post, PostActionType.types[:like])
 
       expect(post.user.unread_notifications).to eq(1)
-      expect(post.user.unread_notifications_by_type).to eq({Notification.types[:liked] => 1 })
 
       PostTiming.process_timings(post.user, post.topic_id, 1, [[post.post_number, 100]])
 
       post.user.reload
-      expect(post.user.unread_notifications_by_type).to eq({})
       expect(post.user.unread_notifications).to eq(0)
 
+      PostTiming.process_timings(post.user, post.topic_id, 1, [[post.post_number, 1.day]])
+
+      user_visit = post.user.user_visits.order('id DESC').first
+      expect(user_visit.posts_read).to eq(1)
+
+      # Skip to bottom
+      PostTiming.process_timings(post.user, post.topic_id, 1, [[5, 100]])
+      expect(user_visit.reload.posts_read).to eq(2)
+
+      # Scroll up
+      PostTiming.process_timings(post.user, post.topic_id, 1, [[4, 100]])
+      expect(user_visit.reload.posts_read).to eq(3)
+      PostTiming.process_timings(post.user, post.topic_id, 1, [[2, 100], [3, 100]])
+      expect(user_visit.reload.posts_read).to eq(5)
+    end
+
+    it 'does not count private message posts read' do
+      pm = Fabricate(:private_message_topic, user: Fabricate(:admin))
+      user1, user2 = pm.topic_allowed_users.map(&:user)
+
+      (1..3).each do |i|
+        Fabricate(:post, topic: pm, user: user1)
+      end
+
+      PostTiming.process_timings(user2, pm.id, 10, [[1, 100]])
+      user_visit = user2.user_visits.last
+      expect(user_visit.posts_read).to eq(0)
+
+      PostTiming.process_timings(user2, pm.id, 10, [[2, 100], [3, 100]])
+      expect(user_visit.reload.posts_read).to eq(0)
     end
   end
 
@@ -90,7 +136,7 @@ describe PostTiming do
       @post = Fabricate(:post)
       @topic = @post.topic
       @coding_horror = Fabricate(:coding_horror)
-      @timing_attrs = {msecs: 1234, topic_id: @post.topic_id, user_id: @coding_horror.id, post_number: @post.post_number}
+      @timing_attrs = { msecs: 1234, topic_id: @post.topic_id, user_id: @coding_horror.id, post_number: @post.post_number }
     end
 
     it 'adds a view to the post' do

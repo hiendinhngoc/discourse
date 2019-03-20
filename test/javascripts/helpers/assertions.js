@@ -1,25 +1,20 @@
-/* exported exists, count, present, blank, containsInstance, not */
-// Test helpers
+/* exported exists, count, present, blank, containsInstance, not, visible, invisible */
+
 function exists(selector) {
-  return !!count(selector);
+  return count(selector) > 0;
 }
 
 function count(selector) {
   return find(selector).length;
 }
 
-function present(obj, text) {
-  ok(!Ember.isEmpty(obj), text);
+function visible(selector) {
+  return find(selector + ":visible").length > 0;
 }
 
-function blank(obj, text) {
-  ok(Ember.isEmpty(obj), text);
-}
-
-function containsInstance(collection, klass, text) {
-  ok(klass.detectInstance(_.first(collection)), text);
-}
-
-function not(state, message) {
-  ok(!state, message);
+function invisible(selector) {
+  var $items = find(selector + ":visible");
+  return $items.length === 0 ||
+         $items.css("opacity") === "0" ||
+         $items.css("visibility") === "hidden";
 }

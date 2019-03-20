@@ -1,44 +1,55 @@
-import DiscoveryController from 'discourse/controllers/discovery';
+import computed from "ember-addons/ember-computed-decorators";
+import DiscoveryController from "discourse/controllers/discovery";
+
+const subcategoryStyleComponentNames = {
+  rows: "categories_only",
+  rows_with_featured_topics: "categories_with_featured_topics",
+  boxes: "categories_boxes",
+  boxes_with_featured_topics: "categories_boxes_with_topics"
+};
 
 export default DiscoveryController.extend({
-  needs: ['modal', 'discovery'],
+  discovery: Ember.inject.controller(),
 
-  withLogo: Em.computed.filterBy('categories', 'logo_url'),
-  showPostsColumn: Em.computed.empty('withLogo'),
+  // this makes sure the composer isn't scoping to a specific category
+  category: null,
 
-  actions: {
-    refresh: function() {
-
-      // Don't refresh if we're still loading
-      if (this.get('controllers.discovery.loading')) { return; }
-
-      // If we `send('loading')` here, due to returning true it bubbles up to the
-      // router and ember throws an error due to missing `handlerInfos`.
-      // Lesson learned: Don't call `loading` yourself.
-      this.set('controllers.discovery.loading', true);
-
-      var parentCategory = this.get('model.parentCategory');
-      var promise;
-      if (parentCategory) {
-        promise = Discourse.CategoryList.listForParent(parentCategory);
-      } else {
-        promise = Discourse.CategoryList.list();
-      }
-
-      var self = this;
-      promise.then(function(list) {
-        self.set('model', list);
-        self.send('loadingComplete');
-      });
-    }
+  @computed
+  canEdit() {
+    return Discourse.User.currentProp("staff");
   },
 
-  canEdit: function() {
-    return Discourse.User.currentProp('staff');
-  }.property(),
+  @computed("model.categories.[].featuredTopics.length")
+  latestTopicOnly() {
+    return (
+      this.get("model.categories").find(
+        c => c.get("featuredTopics.length") > 1
+      ) === undefined
+    );
+  },
 
-  latestTopicOnly: function() {
-    return this.get('categories').find(function(c) { return c.get('featuredTopics.length') > 1; }) === undefined;
-  }.property('categories.@each.featuredTopics.length')
+  @computed("model.parentCategory")
+  categoryPageStyle(parentCategory) {
+    let style = this.site.mobileView
+      ? "categories_with_featured_topics"
+      : this.siteSettings.desktop_category_page_style;
 
+    if (parentCategory) {
+      style =
+        subcategoryStyleComponentNames[
+          parentCategory.get("subcategory_list_style")
+        ] || style;
+    }
+
+    const componentName =
+      parentCategory && style === "categories_and_latest_topics"
+        ? "categories_only"
+        : style;
+    return Ember.String.dasherize(componentName);
+  },
+  actions: {
+    refresh() {
+      this.send("triggerRefresh");
+    }
+  }
 });

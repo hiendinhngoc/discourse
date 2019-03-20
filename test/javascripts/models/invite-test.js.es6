@@ -1,5 +1,7 @@
-module("Discourse.Invite");
+import Invite from "discourse/models/invite";
 
-test("create", function() {
-  ok(Discourse.Invite.create(), "it can be created without arguments");
+QUnit.module("model:invite");
+
+QUnit.test("create", assert => {
+  assert.ok(Invite.create(), "it can be created without arguments");
 });

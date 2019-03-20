@@ -1,5 +1,3 @@
-require 'scheduler/scheduler'
-
 module Jobs
 
   def self.queued
@@ -14,38 +12,108 @@ module Jobs
   end
 
   def self.num_email_retry_jobs
-    Sidekiq::RetrySet.new.select { |job| job.klass =~ /Email$/ }.size
+    Sidekiq::RetrySet.new.count { |job| job.klass =~ /Email$/ }
   end
 
   class Base
+    class JobInstrumenter
+      def initialize(job_class:, opts:, db:, jid:)
+        return unless enabled?
+        @data = {}
 
-    class Instrumenter
+        @data["hostname"] = `hostname`.strip # Hostname
+        @data["pid"] = Process.pid # Pid
+        @data["database"] = db # DB name - multisite db name it ran on
+        @data["job_id"] = jid # Job unique ID
+        @data["job_name"] = job_class.name # Job Name - eg: Jobs::AboutStats
+        @data["job_type"] = job_class.try(:scheduled?) ? "scheduled" : "regular" # Job Type - either s for scheduled or r for regular
+        @data["opts"] = opts.to_json # Params - json encoded params for the job
 
-      def self.stats
-        Thread.current[:db_stats] ||= Stats.new
+        @data["status"] = 'pending'
+        @start_timestamp = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+        self.class.ensure_interval_logging!
+        @@active_jobs ||= []
+        @@active_jobs << self
+
+        MethodProfiler.ensure_discourse_instrumentation!
+        MethodProfiler.start
       end
 
-      class Stats
-        attr_accessor :query_count, :duration_ms
+      def stop(exception:)
+        return unless enabled?
 
-        def initialize
-          @query_count = 0
-          @duration_ms = 0
+        profile = MethodProfiler.stop
+
+        @@active_jobs.delete(self)
+
+        @data["duration"] = profile[:total_duration] # Duration - length in seconds it took to run
+        @data["sql_duration"] = profile.dig(:sql, :duration) || 0 # Sql Duration (s)
+        @data["sql_calls"] = profile.dig(:sql, :calls) || 0 # Sql Statements - how many statements ran
+        @data["redis_duration"] = profile.dig(:redis, :duration) || 0 # Redis Duration (s)
+        @data["redis_calls"] = profile.dig(:redis, :calls) || 0 # Redis commands
+        @data["net_duration"] = profile.dig(:net, :duration) || 0 # Redis Duration (s)
+        @data["net_calls"] = profile.dig(:net, :calls) || 0 # Redis commands
+
+        if exception.present?
+          @data["exception"] = exception # Exception - if job fails a json encoded exception
+          @data["status"] = 'failed'
+        else
+          @data["status"] = 'success' # Status - fail, success, pending
         end
+
+        write_to_log
       end
 
-      def call(name, start, finish, message_id, values)
-        stats = Instrumenter.stats
-        stats.query_count += 1
-        stats.duration_ms += (((finish - start).to_f) * 1000).to_i
+      def self.raw_log(message)
+        @@logger ||= begin
+          f = File.open "#{Rails.root}/log/sidekiq.log", "a"
+          f.sync = true
+          Logger.new f
+        end
+        @@log_queue ||= Queue.new
+        @@log_thread ||= Thread.new do
+          begin
+            loop { @@logger << @@log_queue.pop }
+          rescue Exception => e
+            Discourse.warn_exception(e, message: "Sidekiq logging thread terminated unexpectedly")
+          end
+        end
+        @@log_queue.push(message)
+      end
+
+      def current_duration
+        Process.clock_gettime(Process::CLOCK_MONOTONIC) - @start_timestamp
+      end
+
+      def write_to_log
+        return unless enabled?
+        @data["@timestamp"] = Time.now
+        @data["duration"] = current_duration if @data["status"] == "pending"
+        self.class.raw_log("#{@data.to_json}\n")
+      end
+
+      def enabled?
+        ENV["DISCOURSE_LOG_SIDEKIQ"] == "1"
+      end
+
+      def self.ensure_interval_logging!
+        interval = ENV["DISCOURSE_LOG_SIDEKIQ_INTERVAL"]
+        return if !interval
+        @@interval_thread ||= Thread.new do
+          begin
+            loop do
+              sleep interval.to_i
+              @@active_jobs.each { |j| j.write_to_log if j.current_duration > interval.to_i }
+            end
+          rescue Exception => e
+            Discourse.warn_exception(e, message: "Sidekiq interval logging thread terminated unexpectedly")
+          end
+        end
       end
     end
 
     include Sidekiq::Worker
-
-    def initialize
-      @db_duration = 0
-    end
 
     def log(*args)
       args.each do |arg|
@@ -71,11 +139,11 @@ module Jobs
       ctx
     end
 
-    def self.delayed_perform(opts={})
+    def self.delayed_perform(opts = {})
       self.new.perform(opts)
     end
 
-    def execute(opts={})
+    def execute(opts = {})
       raise "Overwrite me!"
     end
 
@@ -83,16 +151,7 @@ module Jobs
       @db_duration || 0
     end
 
-    def ensure_db_instrumented
-      @@instrumented ||= begin
-        ActiveSupport::Notifications.subscribe('sql.active_record', Instrumenter.new)
-        true
-      end
-    end
-
     def perform(*args)
-      total_db_time = 0
-      ensure_db_instrumented
       opts = args.extract_options!.with_indifferent_access
 
       if SiteSetting.queue_jobs?
@@ -108,12 +167,11 @@ module Jobs
           begin
             retval = execute(opts)
           rescue => exc
-            Discourse.handle_exception(exc, error_context(opts))
+            Discourse.handle_job_exception(exc, error_context(opts))
           end
           return retval
         end
       end
-
 
       dbs =
         if opts[:current_site_id]
@@ -125,68 +183,54 @@ module Jobs
       exceptions = []
       dbs.each do |db|
         begin
-          thread_exception = {}
-          # NOTE: This looks odd, in fact it looks crazy but there is a reason
-          #  A bug in therubyracer means that under certain conditions running in a fiber
-          #  can cause the whole v8 context to corrupt so much that it will hang sidekiq
-          #
-          #  If you are brave and want to try to fix this either in celluloid or therubyracer, the repro is:
-          #
-          #  1. Create a big Discourse db: (you can start from script/profile_db_generator.rb)
-          #  2. Queue a ton of jobs, eg: User.pluck(:id).each{|id| Jobs.enqueue(:user_email, type: :digest, user_id: id)};
-          #  3. Run sidekiq
-          #
-          #  The issue only happens in Ruby 2.0 for some reason, you start getting V8::Error with no context
-          #
-          #  See: https://github.com/cowboyd/therubyracer/issues/206
-          #
-          #  The restricted stack space of fibers opens a bunch of risks up, by avoiding them altogether
-          #   we can mitigate giving up a very marginal amount of throughput
-          #
-          #  Ideally we could just tell sidekiq to avoid fibers
+          exception = {}
 
-          t = Thread.new do
+          RailsMultisite::ConnectionManagement.with_connection(db) do
+            job_instrumenter = JobInstrumenter.new(job_class: self.class, opts: opts, db: db, jid: jid)
             begin
-              RailsMultisite::ConnectionManagement.establish_connection(db: db)
-              I18n.locale = SiteSetting.default_locale
+              I18n.locale = SiteSetting.default_locale || "en"
+              I18n.ensure_all_loaded!
               begin
+                logster_env = {}
+                Logster.add_to_env(logster_env, :job, self.class.to_s)
+                Logster.add_to_env(logster_env, :db, db)
+                Thread.current[Logster::Logger::LOGSTER_ENV] = logster_env
+
                 execute(opts)
               rescue => e
-                thread_exception[:ex] = e
-                thread_exception[:other] = { problem_db: db }
+                exception[:ex] = e
+                exception[:other] = { problem_db: db }
               end
             rescue => e
-              thread_exception[:ex] = e
-              thread_exception[:message] = "While establishing database connection to #{db}"
-              thread_exception[:other] = { problem_db: db }
+              exception[:ex] = e
+              exception[:message] = "While establishing database connection to #{db}"
+              exception[:other] = { problem_db: db }
             ensure
-              ActiveRecord::Base.connection_handler.clear_active_connections!
-              total_db_time += Instrumenter.stats.duration_ms
+              job_instrumenter.stop(exception: exception)
             end
           end
-          t.join
 
-          exceptions << thread_exception unless thread_exception.empty?
+          exceptions << exception unless exception.empty?
         end
       end
 
+      Thread.current[Logster::Logger::LOGSTER_ENV] = nil
+
       if exceptions.length > 0
         exceptions.each do |exception_hash|
-          Discourse.handle_exception(exception_hash[:ex],
-                error_context(opts, exception_hash[:code], exception_hash[:other]))
+          Discourse.handle_job_exception(exception_hash[:ex], error_context(opts, exception_hash[:code], exception_hash[:other]))
         end
-        raise HandledExceptionWrapper.new exceptions[0][:ex]
+        raise HandledExceptionWrapper.new(exceptions[0][:ex])
       end
 
       nil
     ensure
       ActiveRecord::Base.connection_handler.clear_active_connections!
-      @db_duration = total_db_time
     end
 
   end
 
-  class HandledExceptionWrapper < Exception
+  class HandledExceptionWrapper < StandardError
     attr_accessor :wrapped
     def initialize(ex)
       super("Wrapped #{ex.class}: #{ex.message}")
@@ -195,10 +239,16 @@ module Jobs
   end
 
   class Scheduled < Base
-    extend Scheduler::Schedule
+    extend MiniScheduler::Schedule
+
+    def perform(*args)
+      if (Jobs::Heartbeat === self) || !Discourse.readonly_mode?
+        super
+      end
+    end
   end
 
-  def self.enqueue(job_name, opts={})
+  def self.enqueue(job_name, opts = {})
     klass = "Jobs::#{job_name.to_s.camelcase}".constantize
 
     # Unless we want to work on all sites
@@ -208,53 +258,71 @@ module Jobs
 
     # If we are able to queue a job, do it
     if SiteSetting.queue_jobs?
-      if opts[:delay_for].present?
-        klass.delay_for(opts.delete(:delay_for)).delayed_perform(opts)
-      else
-        Sidekiq::Client.enqueue(klass, opts)
+      hash = {
+        'class' => klass,
+        'args' => [opts]
+      }
+
+      if delay = opts.delete(:delay_for)
+        if delay.to_f > 0
+          hash['at'] = Time.now.to_f + delay.to_f
+        end
       end
+
+      if queue = opts.delete(:queue)
+        hash['queue'] = queue
+      end
+
+      klass.client_push(hash)
+
     else
       # Otherwise execute the job right away
       opts.delete(:delay_for)
+      opts.delete(:queue)
+
       opts[:sync_exec] = true
-      klass.new.perform(opts)
+      if Rails.env == "development"
+        Scheduler::Defer.later("job") do
+          klass.new.perform(opts)
+        end
+      else
+        klass.new.perform(opts)
+      end
     end
 
   end
 
-  def self.enqueue_in(secs, job_name, opts={})
+  def self.enqueue_in(secs, job_name, opts = {})
     enqueue(job_name, opts.merge!(delay_for: secs))
   end
 
-  def self.enqueue_at(datetime, job_name, opts={})
-    enqueue_in( [(datetime - Time.zone.now).to_i, 0].max, job_name, opts )
+  def self.enqueue_at(datetime, job_name, opts = {})
+    secs = [(datetime - Time.zone.now).to_i, 0].max
+    enqueue_in(secs, job_name, opts)
   end
 
-  def self.cancel_scheduled_job(job_name, params={})
-    jobs = scheduled_for(job_name, params)
-    return false if jobs.empty?
-    jobs.each { |job| job.delete }
-    true
+  def self.cancel_scheduled_job(job_name, opts = {})
+    scheduled_for(job_name, opts).each(&:delete)
   end
 
-  def self.scheduled_for(job_name, params={})
+  def self.scheduled_for(job_name, opts = {})
+    opts = opts.with_indifferent_access
+    unless opts.delete(:all_sites)
+      opts[:current_site_id] ||= RailsMultisite::ConnectionManagement.current_db
+    end
+
     job_class = "Jobs::#{job_name.to_s.camelcase}"
     Sidekiq::ScheduledSet.new.select do |scheduled_job|
-      if scheduled_job.klass == 'Sidekiq::Extensions::DelayedClass'
-        job_args = YAML.load(scheduled_job.args[0])
-        job_args_class, _, (job_args_params, *) = job_args
-        if job_args_class.to_s == job_class && job_args_params
-          matched = true
-          params.each do |key, value|
-            unless job_args_params[key] == value
-              matched = false
-              break
-            end
+      if scheduled_job.klass.to_s == job_class
+        matched = true
+        job_params = scheduled_job.item["args"][0].with_indifferent_access
+        opts.each do |key, value|
+          if job_params[key] != value
+            matched = false
+            break
           end
-          matched
-        else
-          false
         end
+        matched
       else
         false
       end
@@ -262,6 +330,6 @@ module Jobs
   end
 end
 
-# Require all jobs
-Dir["#{Rails.root}/app/jobs/regular/*.rb"].each {|file| require_dependency file }
-Dir["#{Rails.root}/app/jobs/scheduled/*.rb"].each {|file| require_dependency file }
+Dir["#{Rails.root}/app/jobs/onceoff/*.rb"].each { |file| require_dependency file }
+Dir["#{Rails.root}/app/jobs/regular/*.rb"].each { |file| require_dependency file }
+Dir["#{Rails.root}/app/jobs/scheduled/*.rb"].each { |file| require_dependency file }

@@ -14,5 +14,7 @@ module EmbedHelper
     end
   end
 
+  def get_html(post)
+    raw PrettyText.format_for_email(post.cooked, post)
+  end
 end
-

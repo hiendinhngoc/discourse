@@ -1,41 +1,58 @@
-/**
-  A breadcrumb including category drop downs
+import { default as computed } from "ember-addons/ember-computed-decorators";
 
-  @class BreadCrumbsComponent
-  @extends Ember.Component
-  @namespace Discourse
-  @module Discourse
-**/
+//  A breadcrumb including category drop downs
 export default Ember.Component.extend({
-  classNames: ['category-breadcrumb'],
-  tagName: 'ol',
-  parentCategory: Em.computed.alias('category.parentCategory'),
+  classNameBindings: ["hidden:hidden", ":category-breadcrumb"],
+  tagName: "ol",
 
-  parentCategories: Em.computed.filter('categories', function(c) {
-    if (c.id === Discourse.Site.currentProp("uncategorized_category_id") && !Discourse.SiteSettings.allow_uncategorized_topics) {
+  parentCategory: Ember.computed.alias("category.parentCategory"),
+
+  parentCategories: Ember.computed.filter("categories", function(c) {
+    if (
+      c.id === this.site.get("uncategorized_category_id") &&
+      !this.siteSettings.allow_uncategorized_topics
+    ) {
       // Don't show "uncategorized" if allow_uncategorized_topics setting is false.
       return false;
     }
-    return !c.get('parentCategory');
+
+    return !c.get("parentCategory");
   }),
 
-  firstCategory: function() {
-    return this.get('parentCategory') || this.get('category');
-  }.property('parentCategory', 'category'),
+  @computed("parentCategories")
+  parentCategoriesSorted(parentCategories) {
+    if (this.siteSettings.fixed_category_positions) {
+      return parentCategories;
+    }
 
-  secondCategory: function() {
-    if (this.get('parentCategory')) return this.get('category');
+    return parentCategories.sortBy("totalTopicCount").reverse();
+  },
+
+  @computed("category")
+  hidden(category) {
+    return this.site.mobileView && !category;
+  },
+
+  firstCategory: Ember.computed.or("{parentCategory,category}"),
+
+  @computed("category", "parentCategory")
+  secondCategory(category, parentCategory) {
+    if (parentCategory) return category;
     return null;
-  }.property('category', 'parentCategory'),
+  },
 
-  childCategories: function() {
-    if (this.get('hideSubcategories')) { return []; }
-    var firstCategory = this.get('firstCategory');
-    if (!firstCategory) { return []; }
+  @computed("firstCategory", "hideSubcategories")
+  childCategories(firstCategory, hideSubcategories) {
+    if (hideSubcategories) {
+      return [];
+    }
 
-    return this.get('categories').filter(function (c) {
-      return c.get('parentCategory') === firstCategory;
-    });
-  }.property('firstCategory', 'hideSubcategories')
+    if (!firstCategory) {
+      return [];
+    }
 
+    return this.get("categories").filter(
+      c => c.get("parentCategory") === firstCategory
+    );
+  }
 });

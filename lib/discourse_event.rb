@@ -1,6 +1,6 @@
 # This is meant to be used by plugins to trigger and listen to events
 # So we can execute code when things happen.
-module DiscourseEvent
+class DiscourseEvent
 
   # Defaults to a hash where default values are empty sets.
   def self.events
@@ -17,8 +17,8 @@ module DiscourseEvent
     events[event_name] << block
   end
 
-  def self.clear
-    @events = nil
+  def self.off(event_name, &block)
+    events[event_name].delete(block)
   end
 
 end

@@ -1,24 +1,17 @@
 export default Discourse.Route.extend({
-
-  model: function(params) {
-    return Discourse.Group.find(params.name);
+  titleToken() {
+    return [this.modelFor("group").get("name")];
   },
 
-  serialize: function(model) {
-    return { name: model.get('name').toLowerCase() };
+  model(params) {
+    return this.store.find("group", params.name);
   },
 
-  afterModel: function(model) {
-    var self = this;
-    return Discourse.Group.findGroupCounts(model.get('name')).then(function (counts) {
-      self.set('counts', counts);
-    });
+  serialize(model) {
+    return { name: model.get("name").toLowerCase() };
   },
 
-  setupController: function(controller, model) {
-    controller.setProperties({
-      model: model,
-      counts: this.get('counts')
-    });
+  setupController(controller, model) {
+    controller.setProperties({ model });
   }
 });

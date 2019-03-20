@@ -1,4 +1,4 @@
-require 'spec_helper'
+require 'rails_helper'
 require 'promotion'
 
 describe Promotion do
@@ -15,7 +15,7 @@ describe Promotion do
 
   context "newuser" do
 
-    let(:user) { Fabricate(:user, trust_level: TrustLevel[0])}
+    let(:user) { Fabricate(:user, trust_level: TrustLevel[0], created_at: 2.days.ago) }
     let(:promotion) { Promotion.new(user) }
 
     it "doesn't raise an error with a nil user" do
@@ -53,11 +53,58 @@ describe Promotion do
       end
     end
 
+    context "that has not done the requisite things" do
+      it "does not promote the user" do
+        user.created_at = 1.minute.ago
+        stat = user.user_stat
+        stat.topics_entered = SiteSetting.tl1_requires_topics_entered
+        stat.posts_read_count = SiteSetting.tl1_requires_read_posts
+        stat.time_read = SiteSetting.tl1_requires_time_spent_mins * 60
+        @result = promotion.review
+        expect(@result).to eq(false)
+        expect(user.trust_level).to eq(TrustLevel[0])
+      end
+    end
+
+    context "may send tl1 promotion messages" do
+      before do
+        stat = user.user_stat
+        stat.topics_entered = SiteSetting.tl1_requires_topics_entered
+        stat.posts_read_count = SiteSetting.tl1_requires_read_posts
+        stat.time_read = SiteSetting.tl1_requires_time_spent_mins * 60
+      end
+      it "sends promotion message by default" do
+        SiteSetting.send_tl1_welcome_message = true
+        @result = promotion.review
+        expect(Jobs::SendSystemMessage.jobs.length).to eq(1)
+        job = Jobs::SendSystemMessage.jobs[0]
+        expect(job["args"][0]["user_id"]).to eq(user.id)
+        expect(job["args"][0]["message_type"]).to eq("welcome_tl1_user")
+      end
+
+      it "does not not send when the user already has the tl1 badge when recalculcating" do
+        SiteSetting.send_tl1_welcome_message = true
+        BadgeGranter.grant(Badge.find(1), user)
+        stat = user.user_stat
+        stat.topics_entered = SiteSetting.tl1_requires_topics_entered
+        stat.posts_read_count = SiteSetting.tl1_requires_read_posts
+        stat.time_read = SiteSetting.tl1_requires_time_spent_mins * 60
+        Promotion.recalculate(user)
+        expect(Jobs::SendSystemMessage.jobs.length).to eq(0)
+      end
+
+      it "can be turned off" do
+        SiteSetting.send_tl1_welcome_message = false
+        @result = promotion.review
+        expect(Jobs::SendSystemMessage.jobs.length).to eq(0)
+      end
+    end
+
   end
 
   context "basic" do
 
-    let(:user) { Fabricate(:user, trust_level: TrustLevel[1])}
+    let(:user) { Fabricate(:user, trust_level: TrustLevel[1], created_at: 2.days.ago) }
     let(:promotion) { Promotion.new(user) }
 
     context 'that has done nothing' do
@@ -96,10 +143,29 @@ describe Promotion do
       end
     end
 
+    context "when the account hasn't existed long enough" do
+      it "does not promote the user" do
+        user.created_at = 1.minute.ago
+
+        stat = user.user_stat
+        stat.topics_entered = SiteSetting.tl2_requires_topics_entered
+        stat.posts_read_count = SiteSetting.tl2_requires_read_posts
+        stat.time_read = SiteSetting.tl2_requires_time_spent_mins * 60
+        stat.days_visited = SiteSetting.tl2_requires_days_visited * 60
+        stat.likes_received = SiteSetting.tl2_requires_likes_received
+        stat.likes_given = SiteSetting.tl2_requires_likes_given
+        stat.topic_reply_count = SiteSetting.tl2_requires_topic_reply_count
+
+        result = promotion.review
+        expect(result).to eq(false)
+        expect(user.trust_level).to eq(TrustLevel[1])
+      end
+    end
+
   end
 
   context "regular" do
-    let(:user) { Fabricate(:user, trust_level: TrustLevel[2])}
+    let(:user) { Fabricate(:user, trust_level: TrustLevel[2]) }
     let(:promotion) { Promotion.new(user) }
 
     context "doesn't qualify for promotion" do

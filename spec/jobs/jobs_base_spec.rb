@@ -1,4 +1,4 @@
-require 'spec_helper'
+require 'rails_helper'
 require_dependency 'jobs/base'
 
 describe Jobs::Base do
@@ -19,7 +19,7 @@ describe Jobs::Base do
       raise StandardError
     end
   end
-  
+
   it 'handles correct jobs' do
     job = GoodJob.new
     job.perform({})
@@ -27,12 +27,12 @@ describe Jobs::Base do
   end
 
   it 'handles errors in multisite' do
-    RailsMultisite::ConnectionManagement.expects(:all_dbs).returns(['default','default','default'])
+    RailsMultisite::ConnectionManagement.expects(:all_dbs).returns(['default', 'default', 'default'])
     # one exception per database
-    Discourse.expects(:handle_exception).times(3)
+    Discourse.expects(:handle_job_exception).times(3)
 
-    bad = BadJob.new 
-    expect{bad.perform({})}.to raise_error
+    bad = BadJob.new
+    expect { bad.perform({}) }.to raise_error(Jobs::HandledExceptionWrapper)
     expect(bad.fail_count).to eq(3)
   end
 
@@ -47,4 +47,3 @@ describe Jobs::Base do
   end
 
 end
-

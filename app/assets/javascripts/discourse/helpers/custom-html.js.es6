@@ -1,9 +1,24 @@
-Handlebars.registerHelper('custom-html', function(name, contextString, options) {
-  var html = Discourse.HTML.getCustomHTML(name);
-  if (html) { return html; }
+import PreloadStore from "preload-store";
 
-  var container = (options || contextString).data.view.container;
-  if (container.lookup('template:' + name)) {
-    return Ember.Handlebars.helpers.partial.apply(this, arguments);
+let _customizations = {};
+
+export function getCustomHTML(key) {
+  const c = _customizations[key];
+  if (c) {
+    return new Handlebars.SafeString(c);
   }
-});
+
+  const html = PreloadStore.get("customHTML");
+  if (html && html[key] && html[key].length) {
+    return new Handlebars.SafeString(html[key]);
+  }
+}
+
+export function clearHTMLCache() {
+  _customizations = {};
+}
+
+// Set a fragment of HTML by key. It can then be looked up with `getCustomHTML(key)`.
+export function setCustomHTML(key, html) {
+  _customizations[key] = html;
+}

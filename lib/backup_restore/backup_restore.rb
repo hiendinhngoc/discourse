@@ -1,20 +1,26 @@
-require "backup_restore/backuper"
-require "backup_restore/restorer"
+require_dependency "backup_restore/backuper"
+require_dependency "backup_restore/restorer"
 
 module BackupRestore
 
   class OperationRunningError < RuntimeError; end
 
-  DUMP_FILE = "dump.sql"
+  VERSION_PREFIX = "v".freeze
+  DUMP_FILE = "dump.sql.gz".freeze
+  OLD_DUMP_FILE = "dump.sql".freeze
   METADATA_FILE = "meta.json"
   LOGS_CHANNEL = "/admin/backups/logs"
 
-  def self.backup!(user_id, opts={})
-    start! BackupRestore::Backuper.new(user_id, opts)
+  def self.backup!(user_id, opts = {})
+    if opts[:fork] == false
+      BackupRestore::Backuper.new(user_id, opts).run
+    else
+      start! BackupRestore::Backuper.new(user_id, opts)
+    end
   end
 
-  def self.restore!(user_id, filename, publish_to_message_bus=false)
-    start! BackupRestore::Restorer.new(user_id, filename, publish_to_message_bus)
+  def self.restore!(user_id, opts = {})
+    start! BackupRestore::Restorer.new(user_id, opts)
   end
 
   def self.rollback!
@@ -70,7 +76,7 @@ module BackupRestore
   end
 
   def self.move_tables_between_schemas(source, destination)
-    User.exec_sql(move_tables_between_schemas_sql(source, destination))
+    DB.exec(move_tables_between_schemas_sql(source, destination))
   end
 
   def self.move_tables_between_schemas_sql(source, destination)
@@ -100,12 +106,12 @@ module BackupRestore
   DatabaseConfiguration = Struct.new(:host, :port, :username, :password, :database)
 
   def self.database_configuration
-    config = Rails.env.production? ? ActiveRecord::Base.connection_pool.spec.config : Rails.configuration.database_configuration[Rails.env]
+    config = ActiveRecord::Base.connection_pool.spec.config
     config = config.with_indifferent_access
 
     DatabaseConfiguration.new(
-      config["host"],
-      config["port"],
+      config["backup_host"] || config["host"],
+      config["backup_port"] || config["port"],
       config["username"] || ENV["USER"] || "postgres",
       config["password"],
       config["database"]
@@ -190,7 +196,7 @@ module BackupRestore
   end
 
   def self.backup_tables_count
-    User.exec_sql("SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema = 'backup'")[0]['count'].to_i
+    DB.query_single("SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema = 'backup'").first.to_i
   end
 
 end

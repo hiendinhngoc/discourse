@@ -1,59 +1,78 @@
-/**
-  This controller supports the default interface when you enter the admin section.
+import AdminDashboard from "admin/models/admin-dashboard";
+import Report from "admin/models/report";
+import AdminUser from "admin/models/admin-user";
+import computed from "ember-addons/ember-computed-decorators";
 
-  @class AdminDashboardController
-  @extends Ember.Controller
-  @namespace Discourse
-  @module Discourse
-**/
+const ATTRIBUTES = [
+  "admins",
+  "moderators",
+  "silenced",
+  "suspended",
+  "top_traffic_sources",
+  "top_referred_topics",
+  "updated_at"
+];
+
+const REPORTS = [
+  "global_reports",
+  "page_view_reports",
+  "private_message_reports",
+  "http_reports",
+  "user_reports",
+  "mobile_reports"
+];
+
+// This controller supports the default interface when you enter the admin section.
 export default Ember.Controller.extend({
-  loading: true,
+  loading: null,
   versionCheck: null,
-  problemsCheckMinutes: 1,
+  dashboardFetchedAt: null,
+  exceptionController: Ember.inject.controller("exception"),
 
-  showVersionChecks: Discourse.computed.setting('version_checks'),
+  fetchDashboard() {
+    if (
+      !this.get("dashboardFetchedAt") ||
+      moment()
+        .subtract(30, "minutes")
+        .toDate() > this.get("dashboardFetchedAt")
+    ) {
+      this.set("loading", true);
+      AdminDashboard.find()
+        .then(d => {
+          this.set("dashboardFetchedAt", new Date());
 
-  foundProblems: function() {
-    return(Discourse.User.currentProp('admin') && this.get('problems') && this.get('problems').length > 0);
-  }.property('problems'),
+          REPORTS.forEach(name =>
+            this.set(name, d[name].map(r => Report.create(r)))
+          );
 
-  thereWereProblems: function() {
-    if(!Discourse.User.currentProp('admin')) { return false }
-    if( this.get('foundProblems') ) {
-      this.set('hadProblems', true);
-      return true;
-    } else {
-      return this.get('hadProblems') || false;
+          const topReferrers = d.top_referrers;
+          if (topReferrers && topReferrers.data) {
+            d.top_referrers.data = topReferrers.data.map(user =>
+              AdminUser.create(user)
+            );
+            this.set("top_referrers", topReferrers);
+          }
+
+          ATTRIBUTES.forEach(a => this.set(a, d[a]));
+        })
+        .catch(e => {
+          this.get("exceptionController").set("thrown", e.jqXHR);
+          this.replaceRoute("exception");
+        })
+        .finally(() => {
+          this.set("loading", false);
+        });
     }
-  }.property('foundProblems'),
-
-  loadProblems: function() {
-    this.set('loadingProblems', true);
-    this.set('problemsFetchedAt', new Date());
-    var c = this;
-    Discourse.AdminDashboard.fetchProblems().then(function(d) {
-      c.set('problems', d.problems);
-      c.set('loadingProblems', false);
-      if( d.problems && d.problems.length > 0 ) {
-        c.problemsCheckInterval = 1;
-      } else {
-        c.problemsCheckInterval = 10;
-      }
-    });
   },
 
-  problemsTimestamp: function() {
-    return moment(this.get('problemsFetchedAt')).format('LLL');
-  }.property('problemsFetchedAt'),
-
-  updatedTimestamp: function() {
-    return moment(this.get('updated_at')).format('LLL');
-  }.property('updated_at'),
+  @computed("updated_at")
+  updatedTimestamp(updatedAt) {
+    return moment(updatedAt).format("LLL");
+  },
 
   actions: {
-    refreshProblems: function() {
-      this.loadProblems();
+    showTrafficReport() {
+      this.set("showTrafficReport", true);
     }
   }
-
 });

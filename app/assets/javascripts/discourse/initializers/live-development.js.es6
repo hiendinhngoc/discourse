@@ -1,70 +1,77 @@
-/**
-  Use the message bus for live reloading of components for faster development.
-**/
+import DiscourseURL from "discourse/lib/url";
+import { currentThemeIds, refreshCSS } from "discourse/lib/theme-selector";
+
+//  Use the message bus for live reloading of components for faster development.
 export default {
   name: "live-development",
-  initialize: function() {
+  initialize(container) {
+    const messageBus = container.lookup("message-bus:main");
 
-    // subscribe to any site customizations that are loaded
-    $('link.custom-css').each(function() {
-      var split = this.href.split("/"),
-          id = split[split.length - 1].split(".css")[0],
-          self = this;
+    if (
+      window.history &&
+      window.location.search.indexOf("?preview_theme_id=") === 0
+    ) {
+      // force preview theme id to always be carried along
+      const themeId = parseInt(window.location.search.slice(18).split("&")[0]);
+      if (!isNaN(themeId)) {
+        const patchState = function(f) {
+          const patched = window.history[f];
 
-      return Discourse.MessageBus.subscribe("/file-change/" + id, function(data) {
-        if (!$(self).data('orig')) {
-          $(self).data('orig', self.href);
-        }
-        var orig = $(self).data('orig');
+          window.history[f] = function(stateObj, name, url) {
+            if (url.indexOf("preview_theme_id=") === -1) {
+              const joiner = url.indexOf("?") === -1 ? "?" : "&";
+              url = `${url}${joiner}preview_theme_id=${themeId}`;
+            }
 
-        self.href = orig.replace(/v=.*/, "v=" + data);
-      });
-    });
+            return patched.call(window.history, stateObj, name, url);
+          };
+        };
+        patchState("replaceState");
+        patchState("pushState");
+      }
+    }
 
     // Custom header changes
-    $('header.custom').each(function() {
-      var header = $(this);
-      return Discourse.MessageBus.subscribe("/header-change/" + $(this).data('key'), function(data) {
-        return header.html(data);
-      });
+    $("header.custom").each(function() {
+      const header = $(this);
+      return messageBus.subscribe(
+        "/header-change/" + $(this).data("id"),
+        function(data) {
+          return header.html(data);
+        }
+      );
     });
 
-    // Observe file changes
-    Discourse.MessageBus.subscribe("/file-change", function(data) {
-      Ember.TEMPLATES.empty = Handlebars.compile("<div></div>");
-      _.each(data,function(me) {
+    // Useful to export this for debugging purposes
+    if (Discourse.Environment === "development" && !Ember.testing) {
+      window.DiscourseURL = DiscourseURL;
+    }
 
+    // Observe file changes
+    messageBus.subscribe("/file-change", function(data) {
+      if (Handlebars.compile && !Ember.TEMPLATES.empty) {
+        // hbs notifications only happen in dev
+        Ember.TEMPLATES.empty = Handlebars.compile("<div></div>");
+      }
+      data.forEach(me => {
         if (me === "refresh") {
           // Refresh if necessary
           document.location.reload(true);
-        } else if (me.name.substr(-10) === "hbs") {
-
-          // Reload handlebars
-          var js = me.name.replace(".hbs", "").replace("app/assets/javascripts", "/assets");
-          $LAB.script(js + "?hash=" + me.hash).wait(function() {
-            var templateName;
-            templateName = js.replace(".js", "").replace("/assets/", "");
-            return _.each(Ember.View.views, function(view) {
-              if (view.get('templateName') === templateName) {
-                view.set('templateName', 'empty');
-                view.rerender();
-                Em.run.schedule('afterRender', function() {
-                  view.set('templateName', templateName);
-                  view.rerender();
-                });
-              }
-            });
-          });
-
         } else {
-          $('link').each(function() {
-            // TODO: stop bundling css in DEV please
-            if (true || (this.href.match(me.name) && me.hash)) {
-              if (!$(this).data('orig')) {
-                $(this).data('orig', this.href);
+          const themeIds = currentThemeIds();
+          $("link").each(function() {
+            if (me.hasOwnProperty("theme_id") && me.new_href) {
+              const target = $(this).data("target");
+              const themeId = $(this).data("theme-id");
+              if (
+                themeIds.indexOf(me.theme_id) !== -1 &&
+                target === me.target &&
+                (!themeId || themeId === me.theme_id)
+              ) {
+                refreshCSS(this, null, me.new_href);
               }
-              var orig = $(this).data('orig');
-              this.href = orig + (orig.indexOf('?') >= 0 ? "&hash=" : "?hash=") + me.hash;
+            } else if (this.href.match(me.name) && (me.hash || me.new_href)) {
+              refreshCSS(this, me.hash, me.new_href);
             }
           });
         }

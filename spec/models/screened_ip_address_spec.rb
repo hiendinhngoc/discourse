@@ -1,8 +1,8 @@
-require 'spec_helper'
+require 'rails_helper'
 
 describe ScreenedIpAddress do
   let(:ip_address) { '99.232.23.124' }
-  let(:valid_params) { {ip_address: ip_address} }
+  let(:valid_params) { { ip_address: ip_address } }
 
   describe 'new record' do
     it 'sets a default action_type' do
@@ -30,6 +30,13 @@ describe ScreenedIpAddress do
       expect {
         described_class.new(valid_params.merge(action_name: nil))
       }.to raise_error(ArgumentError)
+    end
+
+    it 'returns a useful error if ip address matches an existing record' do
+      ScreenedIpAddress.create(ip_address: '2600:387:b:f::7a/128', action_name: :block)
+      r = ScreenedIpAddress.new(ip_address: '2600:387:b:f::7a', action_name: :block)
+      expect(r.save).to eq(false)
+      expect(r.errors[:ip_address]).to be_present
     end
   end
 
@@ -238,22 +245,31 @@ describe ScreenedIpAddress do
     end
   end
 
-  describe '#block_login?' do
+  describe '#block_admin_login?' do
     context 'no allow_admin records exist' do
-      it "returns false when user is nil" do
-        expect(described_class.block_login?(nil, '123.12.12.12')).to eq(false)
+
+      it "returns false when use_admin_ip_whitelist is false" do
+        expect(described_class.block_admin_login?(Fabricate.build(:user), '123.12.12.12')).to eq(false)
       end
 
-      it "returns false for non-admin user" do
-        expect(described_class.block_login?(Fabricate.build(:user), '123.12.12.12')).to eq(false)
-      end
+      context "use_admin_ip_whitelist is true" do
+        before { SiteSetting.use_admin_ip_whitelist = true }
 
-      it "returns false for admin user" do
-        expect(described_class.block_login?(Fabricate.build(:admin), '123.12.12.12')).to eq(false)
-      end
+        it "returns false when user is nil" do
+          expect(described_class.block_admin_login?(nil, '123.12.12.12')).to eq(false)
+        end
 
-      it "returns false for admin user and ip_address arg is nil" do
-        expect(described_class.block_login?(Fabricate.build(:admin), nil)).to eq(false)
+        it "returns false for non-admin user" do
+          expect(described_class.block_admin_login?(Fabricate.build(:user), '123.12.12.12')).to eq(false)
+        end
+
+        it "returns false for admin user" do
+          expect(described_class.block_admin_login?(Fabricate.build(:admin), '123.12.12.12')).to eq(false)
+        end
+
+        it "returns false for admin user and ip_address arg is nil" do
+          expect(described_class.block_admin_login?(Fabricate.build(:admin), nil)).to eq(false)
+        end
       end
     end
 
@@ -263,24 +279,32 @@ describe ScreenedIpAddress do
         Fabricate(:screened_ip_address, ip_address: @permitted_ip_address, action_type: described_class.actions[:allow_admin])
       end
 
-      it "returns false when user is nil" do
-        expect(described_class.block_login?(nil, @permitted_ip_address)).to eq(false)
+      it "returns false when use_admin_ip_whitelist is false" do
+        expect(described_class.block_admin_login?(Fabricate.build(:admin), '123.12.12.12')).to eq(false)
       end
 
-      it "returns false for an admin user at the allowed ip address" do
-        expect(described_class.block_login?(Fabricate.build(:admin), @permitted_ip_address)).to eq(false)
-      end
+      context "use_admin_ip_whitelist is true" do
+        before { SiteSetting.use_admin_ip_whitelist = true }
 
-      it "returns true for an admin user at another ip address" do
-        expect(described_class.block_login?(Fabricate.build(:admin), '123.12.12.12')).to eq(true)
-      end
+        it "returns false when user is nil" do
+          expect(described_class.block_admin_login?(nil, @permitted_ip_address)).to eq(false)
+        end
 
-      it "returns false for regular user at allowed ip address" do
-        expect(described_class.block_login?(Fabricate.build(:user), @permitted_ip_address)).to eq(false)
-      end
+        it "returns false for an admin user at the allowed ip address" do
+          expect(described_class.block_admin_login?(Fabricate.build(:admin), @permitted_ip_address)).to eq(false)
+        end
 
-      it "returns false for regular user at another ip address" do
-        expect(described_class.block_login?(Fabricate.build(:user), '123.12.12.12')).to eq(false)
+        it "returns true for an admin user at another ip address" do
+          expect(described_class.block_admin_login?(Fabricate.build(:admin), '123.12.12.12')).to eq(true)
+        end
+
+        it "returns false for regular user at allowed ip address" do
+          expect(described_class.block_admin_login?(Fabricate.build(:user), @permitted_ip_address)).to eq(false)
+        end
+
+        it "returns false for regular user at another ip address" do
+          expect(described_class.block_admin_login?(Fabricate.build(:user), '123.12.12.12')).to eq(false)
+        end
       end
     end
   end

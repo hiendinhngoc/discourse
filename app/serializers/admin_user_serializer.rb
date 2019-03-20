@@ -2,13 +2,13 @@ require_dependency 'admin_user_list_serializer'
 
 class AdminUserSerializer < AdminUserListSerializer
 
-  attributes :associated_accounts,
+  attributes :name,
+             :associated_accounts,
              :can_send_activation_email,
              :can_activate,
              :can_deactivate,
              :ip_address,
-             :registration_ip_address,
-             :can_send_activation_email
+             :registration_ip_address
 
   has_one :single_sign_on_record, serializer: SingleSignOnRecordSerializer, embed: :objects
 

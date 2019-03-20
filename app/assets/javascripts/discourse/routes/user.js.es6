@@ -1,82 +1,89 @@
-var INDEX_STREAM_ROUTES = ["user.deletedPosts", "user.flaggedPosts", "userActivity.index"];
-
 export default Discourse.Route.extend({
-
-  titleToken: function() {
-    var model = this.modelFor('user');
-    var username = model.get('username');
+  titleToken() {
+    const username = this.modelFor("user").get("username");
     if (username) {
       return [I18n.t("user.profile"), username];
     }
   },
 
   actions: {
-    logout: function() {
-      Discourse.logout();
-    },
-
-    composePrivateMessage: function(user) {
-      var recipient = user ? user.get('username') : '';
-      return this.controllerFor('composer').open({
-        action: Discourse.Composer.PRIVATE_MESSAGE,
-        usernames: recipient,
-        archetypeId: 'private_message',
-        draftKey: 'new_private_message'
-      });
-    },
-
-    willTransition: function(transition) {
+    willTransition(transition) {
       // will reset the indexStream when transitioning to routes that aren't "indexStream"
       // otherwise the "header" will jump
-      var isIndexStream = ~INDEX_STREAM_ROUTES.indexOf(transition.targetName);
-      this.controllerFor('user').set('indexStream', isIndexStream);
+      const isIndexStream = transition.targetName === "user.summary";
+      this.controllerFor("user").set("indexStream", isIndexStream);
       return true;
+    },
+
+    undoRevokeApiKey(key) {
+      key.undoRevoke();
+    },
+
+    revokeApiKey(key) {
+      key.revoke();
     }
   },
 
-  model: function(params) {
+  beforeModel() {
+    if (this.siteSettings.hide_user_profiles_from_public && !this.currentUser) {
+      this.replaceWith("discovery");
+    }
+  },
+
+  model(params) {
     // If we're viewing the currently logged in user, return that object instead
-    var currentUser = Discourse.User.current();
-    if (currentUser && (params.username.toLowerCase() === currentUser.get('username_lower'))) {
+    const currentUser = this.currentUser;
+    if (
+      currentUser &&
+      params.username.toLowerCase() === currentUser.get("username_lower")
+    ) {
       return currentUser;
     }
 
-    return Discourse.User.create({username: params.username});
+    return Discourse.User.create({ username: params.username });
   },
 
-  afterModel: function() {
-    var user = this.modelFor('user');
-    return user.findDetails().then(function() {
-      return user.findStaffInfo();
-    });
+  afterModel() {
+    const user = this.modelFor("user");
+    const self = this;
+
+    return user
+      .findDetails()
+      .then(function() {
+        return user.findStaffInfo();
+      })
+      .catch(function() {
+        return self.replaceWith("/404");
+      });
   },
 
-  serialize: function(model) {
+  serialize(model) {
     if (!model) return {};
-    return { username: (Em.get(model, 'username') || '').toLowerCase() };
+    return { username: (Ember.get(model, "username") || "").toLowerCase() };
   },
 
-  setupController: function(controller, user) {
-    controller.set('model', user);
-
-    // Add a search context
-    this.controllerFor('search').set('searchContext', user.get('searchContext'));
+  setupController(controller, user) {
+    controller.set("model", user);
+    this.searchService.set("searchContext", user.get("searchContext"));
   },
 
-  activate: function() {
-    this._super();
-    var user = this.modelFor('user');
-    Discourse.MessageBus.subscribe("/users/" + user.get('username_lower'), function(data) {
+  activate() {
+    this._super(...arguments);
+    const user = this.modelFor("user");
+    this.messageBus.subscribe("/u/" + user.get("username_lower"), function(
+      data
+    ) {
       user.loadUserAction(data);
     });
   },
 
-  deactivate: function() {
-    this._super();
-    Discourse.MessageBus.unsubscribe("/users/" + this.modelFor('user').get('username_lower'));
+  deactivate() {
+    this._super(...arguments);
+    this.messageBus.unsubscribe(
+      "/u/" + this.modelFor("user").get("username_lower")
+    );
 
     // Remove the search context
-    this.controllerFor('search').set('searchContext', null);
+    this.searchService.set("searchContext", null);
   }
-
 });

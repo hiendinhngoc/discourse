@@ -1,51 +1,66 @@
-import ModalFunctionality from 'discourse/mixins/modal-functionality';
-import ObjectController from 'discourse/controllers/object';
+import ModalFunctionality from "discourse/mixins/modal-functionality";
+import DiscourseURL from "discourse/lib/url";
+import computed from "ember-addons/ember-computed-decorators";
 
-// Modal related to changing the ownership of posts
-export default ObjectController.extend(Discourse.SelectedPostsCount, ModalFunctionality, {
-  needs: ['topic'],
+export default Ember.Controller.extend(ModalFunctionality, {
+  topicController: Ember.inject.controller("topic"),
 
-  topicController: Em.computed.alias('controllers.topic'),
-  selectedPosts: Em.computed.alias('topicController.selectedPosts'),
+  saving: false,
+  new_user: null,
 
-  buttonDisabled: function() {
-    if (this.get('saving')) return true;
-    return this.blank('new_user');
-  }.property('saving', 'new_user'),
+  selectedPostsCount: Ember.computed.alias(
+    "topicController.selectedPostsCount"
+  ),
+  selectedPostsUsername: Ember.computed.alias(
+    "topicController.selectedPostsUsername"
+  ),
 
-  buttonTitle: function() {
-    if (this.get('saving')) return I18n.t('saving');
-    return I18n.t('topic.change_owner.action');
-  }.property('saving'),
+  @computed("saving", "new_user")
+  buttonDisabled(saving, newUser) {
+    return saving || Ember.isEmpty(newUser);
+  },
 
-  onShow: function() {
+  @computed("saving")
+  buttonTitle(saving) {
+    return saving ? I18n.t("saving") : I18n.t("topic.change_owner.action");
+  },
+
+  onShow() {
     this.setProperties({
       saving: false,
-      new_user: ''
+      new_user: ""
     });
   },
 
   actions: {
-    changeOwnershipOfPosts: function() {
-      this.set('saving', true);
+    changeOwnershipOfPosts() {
+      this.set("saving", true);
 
-      var postIds = this.get('selectedPosts').map(function(p) { return p.get('id'); }),
-          self = this,
-          saveOpts = {
-            post_ids: postIds,
-            username: this.get('new_user')
-          };
+      const options = {
+        post_ids: this.get("topicController.selectedPostIds"),
+        username: this.get("new_user")
+      };
 
-      Discourse.Topic.changeOwners(this.get('id'), saveOpts).then(function(result) {
-        // success
-        self.send('closeModal');
-        self.get('topicController').send('toggleMultiSelect');
-        Em.run.next(function() { Discourse.URL.routeTo(result.url); });
-      }, function() {
-        // failure
-        self.flash(I18n.t('topic.change_owner.error'), 'alert-error');
-        self.set('saving', false);
-      });
+      Discourse.Topic.changeOwners(
+        this.get("topicController.model.id"),
+        options
+      ).then(
+        () => {
+          this.send("closeModal");
+          this.get("topicController").send("deselectAll");
+          if (this.get("topicController.multiSelect")) {
+            this.get("topicController").send("toggleMultiSelect");
+          }
+          Ember.run.next(() =>
+            DiscourseURL.routeTo(this.get("topicController.model.url"))
+          );
+        },
+        () => {
+          this.flash(I18n.t("topic.change_owner.error"), "alert-error");
+          this.set("saving", false);
+        }
+      );
+
       return false;
     }
   }

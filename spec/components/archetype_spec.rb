@@ -1,6 +1,6 @@
 # encoding: utf-8
 
-require 'spec_helper'
+require 'rails_helper'
 require 'archetype'
 
 describe Archetype do
@@ -36,10 +36,9 @@ describe Archetype do
       @list = Archetype.list.dup
       Archetype.register('glados')
       expect(Archetype.list.size).to eq(@list.size + 1)
-      expect(Archetype.list.find {|a| a.id == 'glados'}).to be_present
+      expect(Archetype.list.find { |a| a.id == 'glados' }).to be_present
     end
 
   end
 
 end
-

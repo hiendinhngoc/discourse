@@ -1,4 +1,4 @@
-require 'spec_helper'
+require 'rails_helper'
 require 'email/renderer'
 
 describe Email::Renderer do
@@ -24,6 +24,3 @@ describe Email::Renderer do
   end
 
 end
-
-
-

@@ -1,11 +1,8 @@
-import DiscourseController from 'discourse/controllers/controller';
+export default Ember.Controller.extend({
+  discovery: Ember.inject.controller(),
+  discoveryTopics: Ember.inject.controller("discovery/topics"),
 
-export default DiscourseController.extend({
-  categories: function() {
-    return Discourse.Category.list();
-  }.property(),
-
-  navItems: function() {
-    return Discourse.NavItem.buildList();
-  }.property()
+  draft: function() {
+    return this.get("discoveryTopics.model.draft");
+  }.property("discoveryTopics.model", "discoveryTopics.model.draft")
 });

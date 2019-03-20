@@ -22,9 +22,22 @@ class ListableTopicSerializer < BasicTopicSerializer
              :is_warning,
              :notification_level,
              :bookmarked,
-             :liked
+             :liked,
+             :unicode_title
 
   has_one :last_poster, serializer: BasicUserSerializer, embed: :objects
+
+  def include_unicode_title?
+    object.title.match?(/:[\w\-+]+:/)
+  end
+
+  def unicode_title
+    Emoji.gsub_emoji_to_unicode(object.title)
+  end
+
+  def highest_post_number
+    (scope.is_staff? && object.highest_staff_post_number) || object.highest_post_number
+  end
 
   def liked
     object.user_data && object.user_data.liked
@@ -45,7 +58,7 @@ class ListableTopicSerializer < BasicTopicSerializer
   def seen
     return true if !scope || !scope.user
     return true if object.user_data && !object.user_data.last_read_post_number.nil?
-    return true if object.created_at < scope.user.treat_as_new_topic_start_date
+    return true if object.created_at < scope.user.user_option.treat_as_new_topic_start_date
     false
   end
 
@@ -64,6 +77,7 @@ class ListableTopicSerializer < BasicTopicSerializer
   def notification_level
     object.user_data.notification_level
   end
+
   def include_notification_level?
     object.user_data.present?
   end
@@ -75,6 +89,10 @@ class ListableTopicSerializer < BasicTopicSerializer
 
   def has_user_data
     !!object.user_data
+  end
+
+  def excerpt
+    object.excerpt
   end
 
   alias :include_last_read_post_number? :has_user_data
@@ -90,7 +108,7 @@ class ListableTopicSerializer < BasicTopicSerializer
   alias :include_new_posts? :has_user_data
 
   def include_excerpt?
-    pinned
+    pinned || SiteSetting.always_include_topic_excerpts
   end
 
   def pinned
@@ -103,8 +121,8 @@ class ListableTopicSerializer < BasicTopicSerializer
 
   protected
 
-    def unread_helper
-      @unread_helper ||= Unread.new(object, object.user_data)
-    end
+  def unread_helper
+    @unread_helper ||= Unread.new(object, object.user_data, scope)
+  end
 
 end

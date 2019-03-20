@@ -1,4 +1,4 @@
-require 'spec_helper'
+require 'rails_helper'
 require_dependency 'jobs/base'
 require 'jobs/regular/process_post'
 
@@ -8,8 +8,8 @@ describe Jobs::FeatureTopicUsers do
     expect { Jobs::FeatureTopicUsers.new.execute({}) }.to raise_error(Discourse::InvalidParameters)
   end
 
-  it "raises an error with a missing topic_id" do
-    expect { Jobs::FeatureTopicUsers.new.execute(topic_id: 123) }.to raise_error(Discourse::InvalidParameters)
+  it "raises no error with a missing topic_id" do
+    Jobs::FeatureTopicUsers.new.execute(topic_id: 123)
   end
 
   context 'with a topic' do
@@ -17,8 +17,8 @@ describe Jobs::FeatureTopicUsers do
     let(:topic) { post.topic }
     let!(:coding_horror) { Fabricate(:coding_horror) }
     let!(:evil_trout) { Fabricate(:evil_trout) }
-    let!(:second_post) { create_post(topic: topic, user: coding_horror)}
-    let!(:third_post) { create_post(topic: topic, user: evil_trout)}
+    let!(:second_post) { create_post(topic: topic, user: coding_horror) }
+    let!(:third_post) { create_post(topic: topic, user: evil_trout) }
 
     it "won't feature the OP" do
       Jobs::FeatureTopicUsers.new.execute(topic_id: topic.id)
@@ -28,11 +28,6 @@ describe Jobs::FeatureTopicUsers do
     it "features the second poster" do
       Jobs::FeatureTopicUsers.new.execute(topic_id: topic.id)
       expect(topic.reload.featured_user_ids.include?(coding_horror.id)).to eq(true)
-    end
-
-    it "will not feature the second poster if we supply their post to be ignored" do
-      Jobs::FeatureTopicUsers.new.execute(topic_id: topic.id, except_post_id: second_post.id)
-      expect(topic.reload.featured_user_ids.include?(coding_horror.id)).to eq(false)
     end
 
     it "won't feature the last poster" do
@@ -46,7 +41,6 @@ describe Jobs::FeatureTopicUsers do
 
     let!(:post) { create_post }
     let(:topic) { post.topic }
-
 
     it "it works as expected" do
 

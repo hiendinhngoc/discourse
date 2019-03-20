@@ -1,48 +1,67 @@
-module("Discourse.URL");
+import { default as DiscourseURL, userPath } from "discourse/lib/url";
 
-test("isInternal with a HTTP url", function() {
-  sandbox.stub(Discourse.URL, "origin").returns("http://eviltrout.com");
+QUnit.module("lib:url");
 
-  not(Discourse.URL.isInternal(null), "a blank URL is not internal");
-  ok(Discourse.URL.isInternal("/test"), "relative URLs are internal");
-  ok(Discourse.URL.isInternal("http://eviltrout.com/tophat"), "a url on the same host is internal");
-  ok(Discourse.URL.isInternal("https://eviltrout.com/moustache"), "a url on a HTTPS of the same host is internal");
-  not(Discourse.URL.isInternal("http://twitter.com"), "a different host is not internal");
+QUnit.test("isInternal with a HTTP url", assert => {
+  sandbox.stub(DiscourseURL, "origin").returns("http://eviltrout.com");
+
+  assert.not(DiscourseURL.isInternal(null), "a blank URL is not internal");
+  assert.ok(DiscourseURL.isInternal("/test"), "relative URLs are internal");
+  assert.ok(
+    DiscourseURL.isInternal("//eviltrout.com"),
+    "a url on the same host is internal (protocol-less)"
+  );
+  assert.ok(
+    DiscourseURL.isInternal("http://eviltrout.com/tophat"),
+    "a url on the same host is internal"
+  );
+  assert.ok(
+    DiscourseURL.isInternal("https://eviltrout.com/moustache"),
+    "a url on a HTTPS of the same host is internal"
+  );
+  assert.not(
+    DiscourseURL.isInternal("//twitter.com.com"),
+    "a different host is not internal (protocol-less)"
+  );
+  assert.not(
+    DiscourseURL.isInternal("http://twitter.com"),
+    "a different host is not internal"
+  );
 });
 
-test("isInternal with a HTTPS url", function() {
-  sandbox.stub(Discourse.URL, "origin").returns("https://eviltrout.com");
-  ok(Discourse.URL.isInternal("http://eviltrout.com/monocle"), "HTTPS urls match HTTP urls");
+QUnit.test("isInternal with a HTTPS url", assert => {
+  sandbox.stub(DiscourseURL, "origin").returns("https://eviltrout.com");
+  assert.ok(
+    DiscourseURL.isInternal("http://eviltrout.com/monocle"),
+    "HTTPS urls match HTTP urls"
+  );
 });
 
-// --------------------------------------------
-// I DON'T KNOW WHY THIS BREAKS OTHER TESTS :(
-  // --------------------------------------------
+QUnit.test("isInternal on subfolder install", assert => {
+  sandbox.stub(DiscourseURL, "origin").returns("http://eviltrout.com/forum");
+  assert.not(
+    DiscourseURL.isInternal("http://eviltrout.com"),
+    "the host root is not internal"
+  );
+  assert.not(
+    DiscourseURL.isInternal("http://eviltrout.com/tophat"),
+    "a url on the same host but on a different folder is not internal"
+  );
+  assert.ok(
+    DiscourseURL.isInternal("http://eviltrout.com/forum/moustache"),
+    "a url on the same host and on the same folder is internal"
+  );
+});
 
-// test("routeTo", function() {
-//   sandbox.stub(Discourse.URL, "handleURL", function (path) { return path === "/t/topic-title/42"; });
+QUnit.test("userPath", assert => {
+  assert.equal(userPath(), "/u");
+  assert.equal(userPath("eviltrout"), "/u/eviltrout");
+  assert.equal(userPath("hp.json"), "/u/hp.json");
+});
 
-//   ok(Discourse.URL.routeTo("https://discourse.org/t/topic-title/42"), "can route HTTPS");
-//   ok(Discourse.URL.routeTo("http://discourse.org/t/topic-title/42"), "can route HTTP");
-//   ok(Discourse.URL.routeTo("//discourse.org/t/topic-title/42"), "can route schemaless");
-//   ok(Discourse.URL.routeTo("/t/topic-title/42"), "can route relative");
-// });
-
-// TODO pending: this works but the test is too mocky and needs to be fixed
-
-// test("navigatedToHome", function() {
-//   var fakeDiscoveryController = { send: function() { return true; } };
-//   var mock = sinon.mock(fakeDiscoveryController);
-//   sandbox.stub(Discourse.URL, "controllerFor").returns(fakeDiscoveryController);
-//
-//   mock.expects("send").withArgs('refresh').twice();
-//   ok(Discourse.URL.navigatedToHome("/", "/"));
-//
-//   var homepage = "/" + Discourse.Utilities.defaultHomepage();
-//   ok(Discourse.URL.navigatedToHome(homepage, "/"));
-//
-//   not(Discourse.URL.navigatedToHome("/old", "/new"));
-//
-//   // make sure we called the .refresh() method
-//   mock.verify();
-// });
+QUnit.test("userPath with BaseUri", assert => {
+  Discourse.BaseUri = "/forum";
+  assert.equal(userPath(), "/forum/u");
+  assert.equal(userPath("eviltrout"), "/forum/u/eviltrout");
+  assert.equal(userPath("hp.json"), "/forum/u/hp.json");
+});

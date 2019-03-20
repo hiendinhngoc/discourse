@@ -1,19 +1,29 @@
-import UploadMixin from 'discourse/mixins/upload';
+import { default as computed } from "ember-addons/ember-computed-decorators";
+import UploadMixin from "discourse/mixins/upload";
 
-export default Em.Component.extend(UploadMixin, {
+export default Ember.Component.extend(UploadMixin, {
   type: "emoji",
   uploadUrl: "/admin/customize/emojis",
+  hasName: Ember.computed.notEmpty("name"),
+  addDisabled: Ember.computed.not("hasName"),
 
-  hasName: Em.computed.notEmpty("name"),
-  addDisabled: Em.computed.not("hasName"),
+  uploadOptions() {
+    return {
+      sequentialUploads: true
+    };
+  },
 
-  data: function() {
-    return Ember.isBlank(this.get("name")) ? {} : { name: this.get("name") };
-  }.property("name"),
+  @computed("hasName", "name")
+  data(hasName, name) {
+    return hasName ? { name } : {};
+  },
 
-  uploadDone: function (data) {
+  validateUploadedFilesOptions() {
+    return { imagesOnly: true };
+  },
+
+  uploadDone(upload) {
     this.set("name", null);
-    this.sendAction("done", data.result);
+    this.done(upload);
   }
-
 });

@@ -1,25 +1,77 @@
-require 'spec_helper'
+require 'rails_helper'
 require_dependency 'site_setting_extension'
 require_dependency 'site_settings/local_process_provider'
 
 describe SiteSettingExtension do
 
-  class FakeSettings
-    extend SiteSettingExtension
-    self.provider = SiteSettings::LocalProcessProvider.new
+  # We disable message bus here to avoid a large amount
+  # of uneeded messaging, tests are careful to call refresh
+  # when they need to.
+  #
+  # DistributedCache used by locale handler can under certain
+  # cases take a tiny bit to stabalize.
+  #
+  # TODO: refactor SiteSettingExtension not to rely on statics in
+  # DefaultsProvider
+  #
+  before do
+    MessageBus.off
   end
 
-  class FakeSettings2
-    extend SiteSettingExtension
-    self.provider = FakeSettings.provider
+  after do
+    MessageBus.on
+  end
+
+  describe '#types' do
+    context "verify enum sequence" do
+      before do
+        @types = SiteSetting.types
+      end
+
+      it "'string' should be at 1st position" do
+        expect(@types[:string]).to eq(1)
+      end
+
+      it "'value_list' should be at 12th position" do
+        expect(@types[:value_list]).to eq(12)
+      end
+    end
+  end
+
+  let :provider_local do
+    SiteSettings::LocalProcessProvider.new
   end
 
   let :settings do
-    FakeSettings
+    new_settings(provider_local)
   end
 
   let :settings2 do
-    FakeSettings2
+    new_settings(provider_local)
+  end
+
+  it "Does not leak state cause changes are not linked" do
+    t1 = Thread.new do
+      5.times do
+        settings = new_settings(SiteSettings::LocalProcessProvider.new)
+        settings.setting(:title, 'test')
+        settings.title = 'title1'
+        expect(settings.title).to eq 'title1'
+
+      end
+    end
+
+    t2 = Thread.new do
+      5.times do
+        settings = new_settings(SiteSettings::LocalProcessProvider.new)
+        settings.setting(:title, 'test')
+        settings.title = 'title2'
+        expect(settings.title).to eq 'title2'
+      end
+    end
+
+    t1.join
+    t2.join
   end
 
   describe "refresh!" do
@@ -27,41 +79,68 @@ describe SiteSettingExtension do
     it "will reset to default if provider vanishes" do
       settings.setting(:hello, 1)
       settings.hello = 100
-      settings.hello.should == 100
+      expect(settings.hello).to eq(100)
 
       settings.provider.clear
       settings.refresh!
 
-      settings.hello.should == 1
+      expect(settings.hello).to eq(1)
     end
 
     it "will set to new value if provider changes" do
 
       settings.setting(:hello, 1)
       settings.hello = 100
-      settings.hello.should == 100
+      expect(settings.hello).to eq(100)
 
-      settings.provider.save(:hello, 99, SiteSetting.types[:fixnum] )
+      settings.provider.save(:hello, 99, SiteSetting.types[:integer])
       settings.refresh!
 
-      settings.hello.should == 99
+      expect(settings.hello).to eq(99)
     end
 
-    it "Publishes changes cross sites" do
+    it "publishes changes cross sites" do
       settings.setting(:hello, 1)
       settings2.setting(:hello, 1)
 
       settings.hello = 100
 
       settings2.refresh!
-      settings2.hello.should == 100
+      expect(settings2.hello).to eq(100)
 
       settings.hello = 99
 
       settings2.refresh!
-      settings2.hello.should == 99
+      expect(settings2.hello).to eq(99)
     end
 
+    it "does not override types in the type supervisor" do
+      settings.setting(:foo, "bar")
+      settings.provider.save(:foo, "bar", SiteSetting.types[:enum])
+      settings.refresh!
+      expect(settings.foo).to eq("bar")
+
+      settings.foo = "baz"
+      expect(settings.foo).to eq("baz")
+    end
+
+    it "clears the cache for site setting uploads" do
+      settings.setting(:upload_type, "", type: :upload)
+      upload = Fabricate(:upload)
+      settings.upload_type = upload
+
+      expect(settings.upload_type).to eq(upload)
+      expect(settings.send(:uploads)[:upload_type]).to eq(upload)
+
+      upload2 = Fabricate(:upload)
+      settings.provider.save(:upload_type, upload2.id, SiteSetting.types[:upload])
+
+      expect do
+        settings.refresh!
+      end.to change { settings.send(:uploads)[:upload_type] }.from(upload).to(nil)
+
+      expect(settings.upload_type).to eq(upload2)
+    end
   end
 
   describe "multisite" do
@@ -69,7 +148,7 @@ describe SiteSettingExtension do
       settings.setting(:hello, 1)
       settings.hello = 100
       settings.provider.current_site = "boom"
-      settings.hello.should == 1
+      expect(settings.hello).to eq(1)
     end
   end
 
@@ -80,16 +159,19 @@ describe SiteSettingExtension do
     end
 
     it "should have a key in all_settings" do
-      settings.all_settings.detect {|s| s[:setting] == :test_setting }.should be_present
+      expect(settings.all_settings.detect { |s| s[:setting] == :test_setting }).to be_present
     end
 
     it "should have the correct desc" do
-      I18n.expects(:t).with("site_settings.test_setting").returns("test description")
-      settings.description(:test_setting).should == "test description"
+      I18n.backend.store_translations(:en, site_settings: { test_setting: "test description <a href='%{base_path}/admin'>/admin</a>" })
+      expect(settings.description(:test_setting)).to eq("test description <a href='/admin'>/admin</a>")
+
+      Discourse.stubs(:base_path).returns("/forum")
+      expect(settings.description(:test_setting)).to eq("test description <a href='/forum/admin'>/admin</a>")
     end
 
     it "should have the correct default" do
-      settings.test_setting.should == 77
+      expect(settings.test_setting).to eq(77)
     end
 
     context "when overidden" do
@@ -99,36 +181,50 @@ describe SiteSettingExtension do
 
       it "should have the correct override" do
         settings.test_setting = 100
-        settings.test_setting.should == 100
+        expect(settings.test_setting).to eq(100)
       end
 
       it "should coerce correct string to int" do
         settings.test_setting = "101"
-        settings.test_setting.should.eql? 101
+        expect(settings.test_setting).to eq(101)
       end
 
       it "should coerce incorrect string to 0" do
         settings.test_setting = "pie"
-        settings.test_setting.should.eql? 0
+        expect(settings.test_setting).to eq(0)
       end
 
-			it "should not set default when reset" do
+      it "should not set default when reset" do
         settings.test_setting = 100
         settings.setting(:test_setting, 77)
         settings.refresh!
-        settings.test_setting.should_not == 77
+        expect(settings.test_setting).not_to eq(77)
       end
 
       it "can be overridden with set" do
         settings.set("test_setting", 12)
-        settings.test_setting.should == 12
+        expect(settings.test_setting).to eq(12)
+      end
+
+      it "should publish changes to clients" do
+        settings.setting("test_setting", 100)
+        settings.setting("test_setting", nil, client: true)
+
+        message = MessageBus.track_publish('/client_settings') do
+          settings.test_setting = 88
+        end.first
+
+        expect(message).to be_present
       end
     end
   end
 
   describe "remove_override" do
-    it "correctly nukes overrides" do
+    before do
       settings.setting(:test_override, "test")
+      settings.refresh!
+    end
+    it "correctly nukes overrides" do
       settings.test_override = "bla"
       settings.remove_override!(:test_override)
       expect(settings.test_override).to eq("test")
@@ -142,7 +238,7 @@ describe SiteSettingExtension do
     end
 
     it "should have the correct default" do
-      settings.test_str.should == "str"
+      expect(settings.test_str).to eq("str")
     end
 
     context "when overridden" do
@@ -152,13 +248,28 @@ describe SiteSettingExtension do
 
       it "should coerce int to string" do
         settings.test_str = 100
-        settings.test_str.should.eql? "100"
+        expect(settings.test_str).to eq("100")
       end
 
       it "can be overridden with set" do
         settings.set("test_str", "hi")
-        settings.test_str.should == "hi"
+        expect(settings.test_str).to eq("hi")
       end
+    end
+  end
+
+  describe "string setting with regex" do
+    it "Supports custom validation errors" do
+      settings.setting(:test_str, "bob", regex: "hi", regex_error: "oops")
+      settings.refresh!
+
+      begin
+        settings.test_str = "a"
+      rescue Discourse::InvalidParameters => e
+        message = e.message
+      end
+
+      expect(message).to match(/oops/)
     end
   end
 
@@ -169,7 +280,7 @@ describe SiteSettingExtension do
     end
 
     it "should have the correct default" do
-      settings.test_hello?.should == false
+      expect(settings.test_hello?).to eq(false)
     end
 
     context "when overridden" do
@@ -179,38 +290,58 @@ describe SiteSettingExtension do
 
       it "should have the correct override" do
         settings.test_hello = true
-        settings.test_hello?.should == true
+        expect(settings.test_hello?).to eq(true)
       end
 
       it "should coerce true strings to true" do
         settings.test_hello = "true"
-        settings.test_hello?.should.eql? true
+        expect(settings.test_hello?).to be(true)
       end
 
       it "should coerce all other strings to false" do
         settings.test_hello = "f"
-        settings.test_hello?.should.eql? false
+        expect(settings.test_hello?).to be(false)
       end
 
-			it "should not set default when reset" do
+      it "should not set default when reset" do
         settings.test_hello = true
         settings.setting(:test_hello?, false)
         settings.refresh!
-        settings.test_hello?.should_not == false
+        expect(settings.test_hello?).not_to eq(false)
       end
 
       it "can be overridden with set" do
         settings.set("test_hello", true)
-        settings.test_hello?.should == true
+        expect(settings.test_hello?).to eq(true)
       end
     end
+  end
+
+  describe 'int enum' do
+    class TestIntEnumClass
+      def self.valid_value?(v)
+        true
+      end
+      def self.values
+        [1, 2, 3]
+      end
+    end
+
+    it 'should coerce correctly' do
+      settings.setting(:test_int_enum, 1, enum: TestIntEnumClass)
+      settings.test_int_enum = "2"
+      settings.refresh!
+      expect(settings.defaults[:test_int_enum]).to eq(1)
+      expect(settings.test_int_enum).to eq(2)
+    end
+
   end
 
   describe 'enum setting' do
 
     class TestEnumClass
       def self.valid_value?(v)
-        true
+        self.values.include?(v)
       end
       def self.values
         ['en']
@@ -234,7 +365,11 @@ describe SiteSettingExtension do
     end
 
     it 'should not hose all_settings' do
-      settings.all_settings.detect {|s| s[:setting] == :test_enum }.should be_present
+      expect(settings.all_settings.detect { |s| s[:setting] == :test_enum }).to be_present
+    end
+
+    it 'should report error when being set other values' do
+      expect { settings.test_enum = 'not_in_enum' }.to raise_error(Discourse::InvalidParameters)
     end
 
     context 'when overridden' do
@@ -250,19 +385,19 @@ describe SiteSettingExtension do
 
       it 'rejects invalid values' do
         test_enum_class.expects(:valid_value?).with('gg').returns(false)
-        expect {settings.test_enum = 'gg' }.to raise_error(Discourse::InvalidParameters)
+        expect { settings.test_enum = 'gg' }.to raise_error(Discourse::InvalidParameters)
       end
     end
   end
 
   describe 'a setting with a category' do
     before do
-      settings.setting(:test_setting, 88, {category: :tests})
+      settings.setting(:test_setting, 88, category: :tests)
       settings.refresh!
     end
 
     it "should return the category in all_settings" do
-      settings.all_settings.find {|s| s[:setting] == :test_setting }[:category].should == :tests
+      expect(settings.all_settings.find { |s| s[:setting] == :test_setting }[:category]).to eq(:tests)
     end
 
     context "when overidden" do
@@ -272,19 +407,19 @@ describe SiteSettingExtension do
 
       it "should have the correct override" do
         settings.test_setting = 101
-        settings.test_setting.should == 101
+        expect(settings.test_setting).to eq(101)
       end
 
       it "should still have the correct category" do
         settings.test_setting = 102
-        settings.all_settings.find {|s| s[:setting] == :test_setting }[:category].should == :tests
+        expect(settings.all_settings.find { |s| s[:setting] == :test_setting }[:category]).to eq(:tests)
       end
     end
   end
 
   describe "setting with a validator" do
     before do
-      settings.setting(:validated_setting, "info@example.com", {type: 'email'})
+      settings.setting(:validated_setting, "info@example.com", type: 'email')
       settings.refresh!
     end
 
@@ -295,7 +430,7 @@ describe SiteSettingExtension do
     it "stores valid values" do
       EmailSettingValidator.any_instance.expects(:valid_value?).returns(true)
       settings.validated_setting = 'success@example.com'
-      settings.validated_setting.should == 'success@example.com'
+      expect(settings.validated_setting).to eq('success@example.com')
     end
 
     it "rejects invalid values" do
@@ -303,12 +438,12 @@ describe SiteSettingExtension do
         EmailSettingValidator.any_instance.expects(:valid_value?).returns(false)
         settings.validated_setting = 'nope'
       }.to raise_error(Discourse::InvalidParameters)
-      settings.validated_setting.should == "info@example.com"
+      expect(settings.validated_setting).to eq("info@example.com")
     end
 
     it "allows blank values" do
       settings.validated_setting = ''
-      settings.validated_setting.should == ''
+      expect(settings.validated_setting).to eq('')
     end
   end
 
@@ -318,7 +453,34 @@ describe SiteSettingExtension do
       settings.refresh!
       expect {
         settings.set("provider", "haxxed")
-      }.to raise_error(ArgumentError)
+      }.to raise_error(Discourse::InvalidParameters)
+    end
+  end
+
+  describe ".set_and_log" do
+    before do
+      settings.setting(:s3_secret_access_key, "old_secret_key", secret: true)
+      settings.setting(:title, "Discourse v1")
+      settings.refresh!
+    end
+
+    it "raises an error when set for an invalid setting name" do
+      expect {
+        settings.set_and_log("provider", "haxxed")
+      }.to raise_error(Discourse::InvalidParameters)
+    end
+
+    it "scrubs secret setting values from logs" do
+      settings.set_and_log("s3_secret_access_key", "new_secret_key")
+      expect(UserHistory.last.previous_value).to eq("[FILTERED]")
+      expect(UserHistory.last.new_value).to eq("[FILTERED]")
+    end
+
+    it "works" do
+      settings.set_and_log("title", "Discourse v2")
+      expect(settings.title).to eq("Discourse v2")
+      expect(UserHistory.last.previous_value).to eq("Discourse v1")
+      expect(UserHistory.last.new_value).to eq("Discourse v2")
     end
   end
 
@@ -330,12 +492,257 @@ describe SiteSettingExtension do
 
     it "filters domain" do
       settings.set("white_listed_spam_host_domains", "http://www.discourse.org/")
-      settings.white_listed_spam_host_domains.should == "www.discourse.org"
+      expect(settings.white_listed_spam_host_domains).to eq("www.discourse.org")
     end
 
     it "returns invalid domain as is, without throwing exception" do
       settings.set("white_listed_spam_host_domains", "test!url")
-      settings.white_listed_spam_host_domains.should == "test!url"
+      expect(settings.white_listed_spam_host_domains).to eq("test!url")
+    end
+  end
+
+  describe "hidden" do
+    before do
+      settings.setting(:superman_identity, 'Clark Kent', hidden: true)
+      settings.refresh!
+    end
+
+    it "is in the `hidden_settings` collection" do
+      expect(settings.hidden_settings.include?(:superman_identity)).to eq(true)
+    end
+
+    it "can be retrieved" do
+      expect(settings.superman_identity).to eq("Clark Kent")
+    end
+
+    it "is not present in all_settings by default" do
+      expect(settings.all_settings.find { |s| s[:setting] == :superman_identity }).to be_blank
+    end
+
+    it "is present in all_settings when we ask for hidden" do
+      expect(settings.all_settings(true).find { |s| s[:setting] == :superman_identity }).to be_present
+    end
+  end
+
+  describe "shadowed_by_global" do
+
+    context "default_locale" do
+      it "supports adding a default locale via a global" do
+        global_setting :default_locale, 'zh_CN'
+        settings.default_locale = 'en'
+        expect(settings.default_locale).to eq('zh_CN')
+      end
+    end
+
+    context "without global setting" do
+      before do
+        settings.setting(:trout_api_key, 'evil', shadowed_by_global: true)
+        settings.refresh!
+      end
+
+      it "should not add the key to the shadowed_settings collection" do
+        expect(settings.shadowed_settings.include?(:trout_api_key)).to eq(false)
+      end
+
+      it "can return the default value" do
+        expect(settings.trout_api_key).to eq('evil')
+      end
+
+      it "can overwrite the default" do
+        settings.trout_api_key = 'tophat'
+        settings.refresh!
+        expect(settings.trout_api_key).to eq('tophat')
+      end
+    end
+
+    context "with blank global setting" do
+      before do
+        GlobalSetting.stubs(:nada).returns('')
+        settings.setting(:nada, 'nothing', shadowed_by_global: true)
+        settings.refresh!
+      end
+
+      it "should return default cause nothing is set" do
+        expect(settings.nada).to eq('nothing')
+      end
+
+    end
+
+    context "with a false override" do
+      before do
+        GlobalSetting.stubs(:bool).returns(false)
+        settings.setting(:bool, true, shadowed_by_global: true)
+        settings.refresh!
+      end
+
+      it "should return default cause nothing is set" do
+        expect(settings.bool).to eq(false)
+      end
+
+      it "should not trigger any message bus work if you try to set it" do
+        m = MessageBus.track_publish('/site_settings') do
+          settings.bool = true
+          expect(settings.bool).to eq(false)
+        end
+        expect(m.length).to eq(0)
+      end
+    end
+
+    context "with global setting" do
+      before do
+        GlobalSetting.stubs(:trout_api_key).returns('purringcat')
+        settings.setting(:trout_api_key, 'evil', shadowed_by_global: true)
+        settings.refresh!
+      end
+
+      it "should return the global setting instead of default" do
+        expect(settings.trout_api_key).to eq('purringcat')
+      end
+
+      it "should return the global setting after a refresh" do
+        settings.refresh!
+        expect(settings.trout_api_key).to eq('purringcat')
+      end
+
+      it "should add the key to the hidden_settings collection" do
+        expect(settings.hidden_settings.include?(:trout_api_key)).to eq(true)
+
+        ['', nil].each_with_index do |setting, index|
+          GlobalSetting.stubs(:"trout_api_key_#{index}").returns(setting)
+          settings.setting(:"trout_api_key_#{index}", 'evil', shadowed_by_global: true)
+          settings.refresh!
+          expect(settings.hidden_settings.include?(:"trout_api_key_#{index}")).to eq(false)
+        end
+      end
+
+      it "should add the key to the shadowed_settings collection" do
+        expect(settings.shadowed_settings.include?(:trout_api_key)).to eq(true)
+      end
+    end
+  end
+
+  describe "secret" do
+    before do
+      settings.setting(:superman_identity, 'Clark Kent', secret: true)
+      settings.refresh!
+    end
+
+    it "is in the `secret_settings` collection" do
+      expect(settings.secret_settings.include?(:superman_identity)).to eq(true)
+    end
+
+    it "can be retrieved" do
+      expect(settings.superman_identity).to eq("Clark Kent")
+    end
+
+    it "is present in all_settings by default" do
+      secret_setting = settings.all_settings.find { |s| s[:setting] == :superman_identity }
+      expect(secret_setting).to be_present
+      expect(secret_setting[:secret]).to eq(true)
+    end
+  end
+
+  describe 'locale default overrides are respected' do
+    before do
+      settings.setting(:test_override, 'default', locale_default: { zh_CN: 'cn' })
+      settings.refresh!
+    end
+
+    after do
+      settings.remove_override!(:test_override)
+    end
+
+    it 'ensures the default cache expired after overriding the default_locale' do
+      expect(settings.test_override).to eq('default')
+      settings.default_locale = 'zh_CN'
+      expect(settings.test_override).to eq('cn')
+    end
+
+    it 'returns the saved setting even locale default exists' do
+      expect(settings.test_override).to eq('default')
+      settings.default_locale = 'zh_CN'
+      settings.test_override = 'saved'
+      expect(settings.test_override).to eq('saved')
+    end
+  end
+
+  describe '.requires_refresh?' do
+    it 'always refresh default_locale always require refresh' do
+      expect(settings.requires_refresh?(:default_locale)).to be_truthy
+    end
+  end
+
+  describe '.default_locale' do
+    it 'is always loaded' do
+      expect(settings.default_locale).to eq 'en'
+    end
+  end
+
+  describe '.default_locale=' do
+    it 'can be changed' do
+      settings.default_locale = 'zh_CN'
+      expect(settings.default_locale).to eq 'zh_CN'
+    end
+
+    it 'refresh!' do
+      settings.expects(:refresh!)
+      settings.default_locale = 'zh_CN'
+    end
+
+    it 'expires the cache' do
+      settings.default_locale = 'zh_CN'
+      expect(Rails.cache.exist?(SiteSettingExtension.client_settings_cache_key)).to be_falsey
+    end
+
+    it 'refreshes the client' do
+      Discourse.expects(:request_refresh!)
+      settings.default_locale = 'zh_CN'
+    end
+  end
+
+  describe "get_hostname" do
+
+    it "properly extracts the hostname" do
+      expect(settings.send(:get_hostname, "discourse.org")).to eq("discourse.org")
+      expect(settings.send(:get_hostname, " discourse.org ")).to eq("discourse.org")
+      expect(settings.send(:get_hostname, "@discourse.org")).to eq("discourse.org")
+      expect(settings.send(:get_hostname, "https://discourse.org")).to eq("discourse.org")
+    end
+
+  end
+
+  describe '.client_settings_json_uncached' do
+    it 'should return the right json value' do
+      upload = Fabricate(:upload)
+      settings.setting(:upload_type, upload.id.to_s, type: :upload, client: true)
+      settings.setting(:string_type, 'haha', client: true)
+      settings.refresh!
+
+      expect(settings.client_settings_json_uncached).to eq(
+        %Q|{"default_locale":"en","upload_type":"#{upload.url}","string_type":"haha"}|
+      )
+    end
+  end
+
+  describe '.setup_methods' do
+    describe 'for uploads site settings' do
+      let(:upload) { Fabricate(:upload) }
+      let(:upload2) { Fabricate(:upload) }
+
+      it 'should return the upload record' do
+        settings.setting(:some_upload, upload.id.to_s, type: :upload)
+
+        expect(settings.some_upload).to eq(upload)
+
+        # Ensure that we cache the upload record
+        expect(settings.some_upload.object_id).to eq(
+          settings.some_upload.object_id
+        )
+
+        settings.some_upload = upload2
+
+        expect(settings.some_upload).to eq(upload2)
+      end
     end
   end
 

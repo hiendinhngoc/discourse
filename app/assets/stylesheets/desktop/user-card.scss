@@ -1,37 +1,70 @@
 // styles that apply to the "share" popup when sharing a link to a post or topic
+// Colors should mostly be absolute here, it will look the same in dark & light themes
 
-#user-card {
+$user_card_primary: $primary;
+$user_card_background: $secondary;
+
+#user-card,
+#group-card {
   position: absolute;
-  width: 500px;
-  left: 20px;
-  z-index: 990;
-  box-shadow: 0 2px 6px rgba(0,0,0, .6);
+  width: 580px;
+  left: -9999px;
+  top: -9999px;
+  z-index: z("usercard");
+  box-shadow: shadow("card");
   margin-top: -2px;
-  background-color: $primary;
-  color: $secondary;
+  color: $user_card_primary;
+  background: $user_card_background center center;
   background-size: cover;
-  background-position: center center;
   min-height: 175px;
+  -webkit-transition: opacity 0.2s, -webkit-transform 0.2s;
+  transition: opacity 0.2s, transform 0.2s;
+
+  opacity: 0;
+  @include transform(scale(0.9));
+
+  &.show {
+    opacity: 1;
+    @include transform(scale(1));
+  }
+
+  &.fixed {
+    position: fixed;
+    z-index: z("composer", "content") + 1;
+  }
+
+  &.docked-card {
+    z-index: z("header") + 1;
+  }
 
   .card-content {
     padding: 12px 12px 0 12px;
-    background: rgba($primary, .85);
+    background: rgba($user_card_background, 0.85);
     margin-top: 80px;
 
     &:after {
-      content: '';
+      content: "";
       display: block;
       clear: both;
     }
+
+    a.card-huge-avatar {
+      outline: none;
+    }
   }
 
-&.no-bg {
-  min-height: 50px;
-
-  .card-content {
-    margin-top: 0;
+  .bio {
+    max-height: 150px;
+    overflow: auto;
   }
-}
+
+  &.no-bg {
+    min-height: 50px;
+
+    .card-content {
+      margin-top: 0;
+    }
+  }
 
   .avatar-placeholder {
     width: 120px;
@@ -41,27 +74,27 @@
   }
 
   h1 {
-    display: inline-block;
     min-width: 120px;
-    font-size: 1.786em;
-    line-height: 1.25;
+    font-size: $font-up-4;
+    line-height: $line-height-medium;
     display: block;
     max-width: 250px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     a {
-      color: $secondary;
+      color: $user_card_primary;
     }
-    i {
-      font-size: .8em;
-      color: $secondary;
+    .d-icon {
+      font-size: $font-down-1;
+      color: $user_card_primary;
     }
   }
 
   h2 {
-    font-size: 1.071em;
-    line-height: 1.25;
+    font-size: $font-up-1;
+    line-height: $line-height-large;
+    margin: 0;
     font-weight: normal;
     display: block;
     max-width: 250px;
@@ -69,45 +102,52 @@
     overflow: hidden;
     text-overflow: ellipsis;
     a {
-      color: $secondary;
+      color: $user_card_primary;
     }
   }
 
   h3 {
-    font-size: 0.929em;
+    font-size: $font-0;
     font-weight: normal;
     margin-top: 0;
-    color: dark-light-diff($secondary, $primary, 25%, -25%);
+    color: scale-color($user_card_primary, $lightness: 20%);
     overflow: hidden;
     text-overflow: ellipsis;
     a {
-      color: dark-light-diff($primary, $secondary, 50%, -50%);
+      color: scale-color($user_card_background, $lightness: 50%);
     }
   }
+
   .groups {
-    font-size: 0.929em;
+    font-size: $font-down-1;
     font-weight: normal;
     margin-top: 0;
-    color: $primary;
+    color: $user_card_background;
 
     .group-link {
-      color: $primary;
+      color: $user_card_background;
     }
   }
 
   .metadata {
     width: 100%;
     clear: both;
-    padding-top: 5px;
+    padding-top: 10px;
+    padding-bottom: 10px;
     h3 {
       display: inline;
       margin-right: 5px;
-      .desc, a {
-        color: dark-light-diff($secondary, $primary, 50%, -50%);
+      .desc,
+      a {
+        color: scale-color($user_card_primary, $lightness: 35%);
       }
     }
-    div {display: inline; color: scale-color($primary, $lightness: 50%);
-    .group-link {color: scale-color($primary, $lightness: 50%);}
+    div {
+      display: inline;
+      color: scale-color($user_card_background, $lightness: 50%);
+      .group-link {
+        color: scale-color($user_card_background, $lightness: 50%);
+      }
     }
   }
 
@@ -116,16 +156,12 @@
     padding-top: 10px;
   }
 
-  &.has-card-badge-image .bio {
-    width: 75%;
-  }
-
   .bio {
-    padding: 15px 0 0 0;
+    margin-top: 80px;
     clear: left;
 
     a {
-      color: $secondary;
+      color: $user_card_primary;
       text-decoration: underline;
     }
     img {
@@ -133,18 +169,83 @@
     }
 
     a.mention {
-      background-color: dark-light-diff($secondary, $primary, 50%, -60%);
+      text-decoration: none;
     }
+
     .overflow {
       max-height: 60px;
       overflow: hidden;
     }
   }
 
-  img.avatar {
+  .location-and-website {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    padding-top: 5px;
+    .location,
+    .website-name {
+      display: flex;
+      max-width: 90%;
+      overflow: hidden;
+      align-items: baseline;
+      .d-icon {
+        margin-right: 0.25em;
+      }
+    }
+    .website-name a,
+    .location span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: $user_card_primary;
+    }
+    .location {
+      margin-right: 0.5em;
+    }
+    .website-name a {
+      text-decoration: underline;
+    }
+  }
+
+  .user-card-avatar,
+  .group-card-avatar {
     float: left;
-    padding-right: 10px;
+    margin-right: 10px;
     margin-top: -53px;
+  }
+
+  .group-card-avatar {
+    $size: 120px;
+    width: $size;
+    height: $size;
+    .avatar-flair {
+      width: $size;
+      height: $size;
+      display: flex;
+      align-items: center;
+      background-repeat: no-repeat;
+      background-position: center;
+      background-size: $size;
+      color: $primary;
+      .d-icon {
+        margin: auto;
+        font-size: $size / 1.5 !important;
+      }
+      &.rounded {
+        border-radius: 50%;
+      }
+    }
+  }
+
+  .members {
+    padding: 0 0 10px 0;
+    a {
+      color: lighten($primary, 40%);
+      &:hover {
+        color: $primary;
+      }
+    }
   }
 
   p {
@@ -161,55 +262,56 @@
     float: right;
     margin: 0;
 
-    a {width: 100%; min-width: 150px;}
+    button {
+      width: 100%;
+      min-width: 150px;
+    }
   }
 
   .new-user a {
-    color: scale-color($primary, $lightness: 70%);
+    color: scale-color($user_card_background, $lightness: 70%);
   }
 
-  &.show-badges {
-    width: 580px;
+  .names {
+    float: left;
+    width: 45%;
 
-    .names {
-      float: left;
-      height: 60px;
-      position: relative;
-      width: 45%;
-      margin-top: 11px;
+    span {
+      display: block;
+      width: 250px;
+    }
+  }
 
-      span {
-        position: absolute;
-        bottom: 0;
-        display: block;
-        width: 250px;
-      }
-
+  .badge-section {
+    display: flex;
+    align-items: flex-start;
+    padding-bottom: 10px;
+    margin-top: 5px;
+    span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 185px;
+    }
+    .user-badge {
+      display: flex;
+      white-space: nowrap;
+      margin-right: 0.5em;
+      background: $primary-very-low;
+      border: 1px solid $primary-low;
+      color: $user_card_primary;
     }
 
-    .badge-section {
-      float: left;
-      width: 500px;
-      padding-bottom: 10px;
-      margin-top: 5px;
-
-      .user-badge {
-        background: transparent;
-        color: dark-light-diff($primary, $secondary, 50%, -50%);
-        border-color: dark-light-diff($primary, $secondary, 50%, -50%);
-      }
-
-      h3 {
-        color: $primary;
-        font-size: 1em;
-        margin-bottom: -8px;
-      }
+    h3 {
+      color: $user_card_background;
+      font-size: $font-0;
+      margin-bottom: -8px;
     }
+  }
 
-    .more-user-badges {
-      @extend .user-badge;
-      padding: 3px 8px;
-    }
+  .more-user-badges {
+    @extend .user-badge;
+    padding: 3px 8px;
+    white-space: nowrap;
   }
 
   .suspended {
@@ -219,14 +321,7 @@
     padding-top: 15px;
   }
 
-  .card-badge {
-    img {
-      max-width: 120px;
-    }
-    position: absolute;
-    right: 12px;
-    bottom: 12px;
-    font-size: 2.143em;
-    i {color: $secondary;}
+  .metadata .email .btn {
+    padding: 2px 12px;
   }
 }

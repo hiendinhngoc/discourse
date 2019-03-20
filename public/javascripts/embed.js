@@ -1,28 +1,53 @@
-/* global discourseUrl */
-/* global discourseUserName */
-/* global discourseEmbedUrl */
 (function() {
-  var comments = document.getElementById('discourse-comments'),
-  iframe = document.createElement('iframe');
-  if (typeof discourseUserName === 'undefined') {
-    iframe.src =
-      [ discourseUrl,
-        'embed/comments?embed_url=',
-        encodeURIComponent(discourseEmbedUrl)
-      ].join('');
-  } else {
-    iframe.src =
-      [ discourseUrl,
-        'embed/comments?embed_url=',
-        encodeURIComponent(discourseEmbedUrl),
-        '&discourse_username=',
-        discourseUserName
-      ].join('');
+
+  var DE = window.DiscourseEmbed || {};
+  var comments = document.getElementById('discourse-comments');
+  var iframe = document.createElement('iframe');
+
+  ['discourseUrl', 'discourseEmbedUrl', 'discourseUserName', 'discourseReferrerPolicy'].forEach(function(i) {
+    if (window[i]) { DE[i] = DE[i] || window[i]; }
+  });
+
+  var queryParams = {};
+
+  if (DE.discourseEmbedUrl) {
+    if (DE.discourseEmbedUrl.indexOf('/') === 0) {
+      console.error("discourseEmbedUrl must be a full URL, not a relative path");
+    }
+
+    queryParams.embed_url = encodeURIComponent(DE.discourseEmbedUrl);
   }
+
+  if (DE.discourseUserName) {
+    queryParams.discourse_username = DE.discourseUserName;
+  }
+
+  if (DE.topicId) {
+    queryParams.topic_id = DE.topicId;
+  }
+
+  var src = DE.discourseUrl + 'embed/comments';
+  var keys = Object.keys(queryParams);
+  if (keys.length > 0) {
+    src += "?";
+
+    for (var i=0; i<keys.length; i++) {
+      if (i > 0) { src += "&"; }
+
+      var k = keys[i];
+      src += k + "=" + queryParams[k];
+    }
+  }
+
+  iframe.src = src;
   iframe.id = 'discourse-embed-frame';
   iframe.width = "100%";
   iframe.frameBorder = "0";
   iframe.scrolling = "no";
+  if (DE.discourseReferrerPolicy) {
+    // See https://www.w3.org/TR/html5/semantics-embedded-content.html#the-iframe-element
+    iframe.referrerPolicy = DE.discourseReferrerPolicy;
+  }
   comments.appendChild(iframe);
 
   // Thanks http://amendsoft-javascript.blogspot.ca/2010/04/find-x-and-y-coordinate-of-html-control.html
@@ -46,9 +71,13 @@
     return top;
   }
 
+  function normalizeUrl(url) {
+    return url.toLowerCase().replace(/^https?(\:\/\/)?/, '');
+  }
+
   function postMessageReceived(e) {
     if (!e) { return; }
-    if (discourseUrl.indexOf(e.origin) === -1) { return; }
+    if (normalizeUrl(DE.discourseUrl).indexOf(normalizeUrl(e.origin)) === -1) { return; }
 
     if (e.data) {
       if (e.data.type === 'discourse-resize' && e.data.height) {

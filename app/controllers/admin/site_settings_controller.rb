@@ -1,9 +1,10 @@
 class Admin::SiteSettingsController < Admin::AdminController
+  rescue_from Discourse::InvalidParameters do |e|
+    render_json_error e.message, status: 422
+  end
 
   def index
-    site_settings = SiteSetting.all_settings
-    info = {site_settings: site_settings, diags: SiteSetting.diags }
-    render_json_dump(info.as_json)
+    render_json_dump(site_settings: SiteSetting.all_settings, diags: SiteSetting.diags)
   end
 
   def update
@@ -11,13 +12,22 @@ class Admin::SiteSettingsController < Admin::AdminController
     id = params[:id]
     value = params[id]
     value.strip! if value.is_a?(String)
-    begin
-      prev_value = SiteSetting.send(id)
-      SiteSetting.set(id, value)
-      StaffActionLogger.new(current_user).log_site_setting_change(id, prev_value, value) if SiteSetting.has_setting?(id)
-      render nothing: true
-    rescue Discourse::InvalidParameters => e
-      render json: {errors: [e.message]}, status: 422
+    raise_access_hidden_setting(id)
+
+    if SiteSetting.type_supervisor.get_type(id) == :upload
+      value = Upload.get_from_url(value) || ''
+    end
+
+    SiteSetting.set_and_log(id, value, current_user)
+    render body: nil
+  end
+
+  private
+
+  def raise_access_hidden_setting(id)
+    # note, as of Ruby 2.3 symbols are GC'd so this is considered safe
+    if SiteSetting.hidden_settings.include?(id.to_sym)
+      raise Discourse::InvalidParameters, "You are not allowed to change hidden settings"
     end
   end
 

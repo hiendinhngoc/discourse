@@ -1,30 +1,106 @@
-import UploadMixin from 'discourse/mixins/upload';
+import computed from "ember-addons/ember-computed-decorators";
+import UploadMixin from "discourse/mixins/upload";
+import lightbox from "discourse/lib/lightbox";
+import { ajax } from "discourse/lib/ajax";
+import { popupAjaxError } from "discourse/lib/ajax-error";
 
-export default Em.Component.extend(UploadMixin, {
+export default Ember.Component.extend(UploadMixin, {
+  classNames: ["image-uploader"],
+  loadingLightbox: false,
 
-  backgroundStyle: function() {
-    var imageUrl = this.get('imageUrl');
-    if (Em.isNone(imageUrl)) { return; }
+  init() {
+    this._super(...arguments);
+    this._applyLightbox();
+  },
 
-    return "background-image: url(" + imageUrl + ")";
-  }.property('imageUrl'),
+  willDestroyElement() {
+    this._super(...arguments);
+    const elem = $("a.lightbox");
+    if (elem && typeof elem.magnificPopup === "function") {
+      $("a.lightbox").magnificPopup("close");
+    }
+  },
 
-  uploadDone: function(data) {
-    this.set('imageUrl', data.result.url);
+  @computed("imageUrl")
+  backgroundStyle(imageUrl) {
+    if (Ember.isEmpty(imageUrl)) {
+      return "".htmlSafe();
+    }
+
+    return `background-image: url(${imageUrl})`.htmlSafe();
+  },
+
+  @computed("imageUrl")
+  imageBaseName(imageUrl) {
+    if (Ember.isEmpty(imageUrl)) return;
+    return imageUrl.split("/").slice(-1)[0];
+  },
+
+  @computed("backgroundStyle")
+  hasBackgroundStyle(backgroundStyle) {
+    return !Ember.isEmpty(backgroundStyle.string);
+  },
+
+  validateUploadedFilesOptions() {
+    return { imagesOnly: true };
+  },
+
+  uploadDone(upload) {
+    this.setProperties({
+      imageUrl: upload.url,
+      imageId: upload.id,
+      imageFilesize: upload.human_filesize,
+      imageFilename: upload.original_filename,
+      imageWidth: upload.width,
+      imageHeight: upload.height
+    });
+
+    this._applyLightbox();
+
+    if (this.onUploadDone) {
+      this.onUploadDone(upload);
+    }
+  },
+
+  _openLightbox() {
+    Ember.run.next(() => this.$("a.lightbox").magnificPopup("open"));
+  },
+
+  _applyLightbox() {
+    if (this.get("imageUrl")) Ember.run.next(() => lightbox(this.$()));
   },
 
   actions: {
-    trash: function() {
-      this.set('imageUrl', null);
+    toggleLightbox() {
+      if (this.get("imageFilename")) {
+        this._openLightbox();
+      } else {
+        this.set("loadingLightbox", true);
 
-      // Do we want to signal the delete to the server right away?
-      if (this.get('instantDelete')) {
-        Discourse.ajax(this.get('uploadUrl'), {
-          type: 'DELETE',
-          data: { image_type: this.get('type') }
-        }).then(null, function() {
-          bootbox.alert(I18n.t('generic_error'));
-        });
+        ajax(`/uploads/lookup-metadata`, {
+          type: "POST",
+          data: { url: this.get("imageUrl") }
+        })
+          .then(json => {
+            this.setProperties({
+              imageFilename: json.original_filename,
+              imageFilesize: json.human_filesize,
+              imageWidth: json.width,
+              imageHeight: json.height
+            });
+
+            this._openLightbox();
+            this.set("loadingLightbox", false);
+          })
+          .catch(popupAjaxError);
+      }
+    },
+
+    trash() {
+      this.setProperties({ imageUrl: null, imageId: null });
+
+      if (this.onUploadDeleted) {
+        this.onUploadDeleted();
       }
     }
   }

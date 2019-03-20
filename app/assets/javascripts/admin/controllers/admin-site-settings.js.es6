@@ -1,62 +1,91 @@
-export default Ember.ArrayController.extend(Discourse.Presence, {
+import debounce from "discourse/lib/debounce";
+
+export default Ember.Controller.extend({
   filter: null,
+  allSiteSettings: Ember.computed.alias("model"),
+  visibleSiteSettings: null,
   onlyOverridden: false,
-  filtered: Ember.computed.notEmpty('filter'),
 
-  /**
-    The list of settings based on the current filters
-
-    @property filterContent
-  **/
-  filterContent: Discourse.debounce(function() {
-
+  filterContentNow(category) {
     // If we have no content, don't bother filtering anything
-    if (!this.present('allSiteSettings')) return;
+    if (!!Ember.isEmpty(this.get("allSiteSettings"))) return;
 
-    var filter;
-    if (this.get('filter')) {
-      filter = this.get('filter').toLowerCase();
+    let filter;
+    if (this.get("filter")) {
+      filter = this.get("filter").toLowerCase();
     }
 
-    if ((filter === undefined || filter.length < 1) && !this.get('onlyOverridden')) {
-      this.set('model', this.get('allSiteSettings'));
+    if ((!filter || 0 === filter.length) && !this.get("onlyOverridden")) {
+      this.set("visibleSiteSettings", this.get("allSiteSettings"));
       this.transitionToRoute("adminSiteSettings");
       return;
     }
 
-    var self = this,
-        matches,
-        matchesGroupedByCategory = Em.A([{nameKey: 'all_results', name: I18n.t('admin.site_settings.categories.all_results'), siteSettings: []}]);
+    const all = {
+      nameKey: "all_results",
+      name: I18n.t("admin.site_settings.categories.all_results"),
+      siteSettings: []
+    };
+    const matchesGroupedByCategory = [all];
 
-    _.each(this.get('allSiteSettings'), function(settingsCategory) {
-      matches = settingsCategory.siteSettings.filter(function(item) {
-        if (self.get('onlyOverridden') && !item.get('overridden')) return false;
+    const matches = [];
+    this.get("allSiteSettings").forEach(settingsCategory => {
+      const siteSettings = settingsCategory.siteSettings.filter(item => {
+        if (this.get("onlyOverridden") && !item.get("overridden")) return false;
         if (filter) {
-          if (item.get('setting').toLowerCase().indexOf(filter) > -1) return true;
-          if (item.get('setting').toLowerCase().replace(/_/g, ' ').indexOf(filter) > -1) return true;
-          if (item.get('description').toLowerCase().indexOf(filter) > -1) return true;
-          if (item.get('value').toLowerCase().indexOf(filter) > -1) return true;
-          return false;
+          const setting = item.get("setting").toLowerCase();
+          return (
+            setting.includes(filter) ||
+            setting.replace(/_/g, " ").includes(filter) ||
+            item
+              .get("description")
+              .toLowerCase()
+              .includes(filter) ||
+            (item.get("value") || "").toLowerCase().includes(filter)
+          );
         } else {
           return true;
         }
       });
-      if (matches.length > 0) {
-        matchesGroupedByCategory[0].siteSettings.pushObjects(matches);
+      if (siteSettings.length > 0) {
+        matches.pushObjects(siteSettings);
+        matchesGroupedByCategory.pushObject({
+          nameKey: settingsCategory.nameKey,
+          name: I18n.t(
+            "admin.site_settings.categories." + settingsCategory.nameKey
+          ),
+          siteSettings,
+          count: siteSettings.length
+        });
       }
     });
 
-    this.set('model', matchesGroupedByCategory);
-    this.transitionToRoute("adminSiteSettingsCategory", "all_results");
-  }, 250).observes('filter', 'onlyOverridden'),
+    all.siteSettings.pushObjects(matches.slice(0, 30));
+    all.hasMore = matches.length > 30;
+    all.count = all.hasMore ? "30+" : matches.length;
+
+    this.set("visibleSiteSettings", matchesGroupedByCategory);
+    this.transitionToRoute(
+      "adminSiteSettingsCategory",
+      category || "all_results"
+    );
+  },
+
+  filterContent: debounce(function() {
+    if (this.get("_skipBounce")) {
+      this.set("_skipBounce", false);
+    } else {
+      this.filterContentNow();
+    }
+  }, 250).observes("filter", "onlyOverridden"),
 
   actions: {
-    clearFilter: function() {
-      this.setProperties({
-        filter: '',
-        onlyOverridden: false
-      });
+    clearFilter() {
+      this.setProperties({ filter: "", onlyOverridden: false });
+    },
+
+    toggleMenu() {
+      $(".admin-detail").toggleClass("mobile-closed mobile-open");
     }
   }
-
 });

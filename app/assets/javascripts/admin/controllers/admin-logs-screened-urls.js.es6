@@ -1,20 +1,21 @@
-import { outputExportResult } from 'discourse/lib/export-result';
+import { exportEntity } from "discourse/lib/export-csv";
+import { outputExportResult } from "discourse/lib/export-result";
+import ScreenedUrl from "admin/models/screened-url";
 
-export default Ember.ArrayController.extend(Discourse.Presence, {
+export default Ember.Controller.extend({
   loading: false,
 
-  show: function() {
-    var self = this;
-    self.set('loading', true);
-    Discourse.ScreenedUrl.findAll().then(function(result) {
-      self.set('model', result);
-      self.set('loading', false);
+  show() {
+    this.set("loading", true);
+    ScreenedUrl.findAll().then(result => {
+      this.set("model", result);
+      this.set("loading", false);
     });
   },
 
   actions: {
-    exportScreenedUrlList: function(subject) {
-      Discourse.ExportCsv.exportScreenedUrlList().then(outputExportResult);
+    exportScreenedUrlList() {
+      exportEntity("screened_url").then(outputExportResult);
     }
   }
 });

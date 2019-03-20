@@ -1,24 +1,13 @@
 class UserExport < ActiveRecord::Base
-
-  def self.get_download_path(filename)
-    path = File.join(UserExport.base_directory, filename)
-    if File.exists?(path)
-      return path
-    else
-      nil
-    end
-  end
+  belongs_to :user
 
   def self.remove_old_exports
-    expired_exports = UserExport.where('created_at < ?', 2.days.ago).to_a
-    expired_exports.map do |expired_export|
-      file_name = "#{expired_export.file_name}-#{expired_export.id}.csv.gz"
+    UserExport.where('created_at < ?', 2.days.ago).find_each do |user_export|
+      file_name = "#{user_export.file_name}-#{user_export.id}.csv.gz"
       file_path = "#{UserExport.base_directory}/#{file_name}"
 
-      if File.exist?(file_path)
-        File.delete(file_path)
-      end
-      UserExport.find(expired_export.id).destroy
+      File.delete(file_path) if File.exist?(file_path)
+      user_export.destroy!
     end
   end
 
@@ -32,9 +21,10 @@ end
 #
 # Table name: user_exports
 #
-#  id          :integer          not null, primary key
-#  file_name   :string(255)      not null
-#  user_id     :integer          not null
-#  created_at  :datetime
-#  updated_at  :datetime
+#  id         :integer          not null, primary key
+#  file_name  :string           not null
+#  user_id    :integer          not null
+#  created_at :datetime         not null
+#  updated_at :datetime         not null
+#  upload_id  :integer
 #

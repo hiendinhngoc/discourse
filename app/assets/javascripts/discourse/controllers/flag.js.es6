@@ -1,125 +1,189 @@
-import ModalFunctionality from 'discourse/mixins/modal-functionality';
-import ObjectController from 'discourse/controllers/object';
+import ModalFunctionality from "discourse/mixins/modal-functionality";
+import ActionSummary from "discourse/models/action-summary";
+import { MAX_MESSAGE_LENGTH } from "discourse/models/post-action-type";
+import computed from "ember-addons/ember-computed-decorators";
+import optionalService from "discourse/lib/optional-service";
+import { popupAjaxError } from "discourse/lib/ajax-error";
 
-export default ObjectController.extend(ModalFunctionality, {
+export default Ember.Controller.extend(ModalFunctionality, {
+  adminTools: optionalService(),
+  userDetails: null,
+  selected: null,
+  flagTopic: null,
+  message: null,
+  isWarning: false,
+  topicActionByName: null,
+  spammerDetails: null,
 
-  onShow: function() {
-    this.set('selected', null);
+  onShow() {
+    this.setProperties({
+      selected: null,
+      spammerDetails: null
+    });
+
+    let adminTools = this.get("adminTools");
+    if (adminTools) {
+      adminTools.checkSpammer(this.get("model.user_id")).then(result => {
+        this.set("spammerDetails", result);
+      });
+    }
+  },
+
+  @computed("spammerDetails.canDelete", "selected.name_key")
+  showDeleteSpammer(canDeleteSpammer, nameKey) {
+    return canDeleteSpammer && nameKey === "spam";
+  },
+
+  @computed("flagTopic")
+  title(flagTopic) {
+    return flagTopic ? "flagging_topic.title" : "flagging.title";
   },
 
   flagsAvailable: function() {
-    if (!this.get('flagTopic')) {
-      return this.get('model.flagsAvailable');
+    if (!this.get("flagTopic")) {
+      // flagging post
+      let flagsAvailable = this.get("model.flagsAvailable");
+
+      // "message user" option should be at the top
+      const notifyUserIndex = flagsAvailable.indexOf(
+        flagsAvailable.filterBy("name_key", "notify_user")[0]
+      );
+      if (notifyUserIndex !== -1) {
+        const notifyUser = flagsAvailable[notifyUserIndex];
+        flagsAvailable.splice(notifyUserIndex, 1);
+        flagsAvailable.splice(0, 0, notifyUser);
+      }
+      return flagsAvailable;
     } else {
-      var self = this,
-          lookup = Em.Object.create();
-
-      _.each(this.get("actions_summary"),function(a) {
-        var actionSummary;
-        a.flagTopic = self.get('model');
-        a.actionType = Discourse.Site.current().topicFlagTypeById(a.id);
-        actionSummary = Discourse.ActionSummary.create(a);
-        lookup.set(a.actionType.get('name_key'), actionSummary);
+      // flagging topic
+      let lookup = Ember.Object.create();
+      let model = this.get("model");
+      model.get("actions_summary").forEach(a => {
+        a.flagTopic = model;
+        a.actionType = this.site.topicFlagTypeById(a.id);
+        lookup.set(a.actionType.get("name_key"), ActionSummary.create(a));
       });
-      this.set('topicActionByName', lookup);
+      this.set("topicActionByName", lookup);
 
-      return Discourse.Site.currentProp('topic_flag_types').filter(function(item) {
-        return _.any(self.get("actions_summary"), function(a) {
-          return (a.id === item.get('id') && a.can_act);
+      return this.site.get("topic_flag_types").filter(item => {
+        return _.any(this.get("model.actions_summary"), a => {
+          return a.id === item.get("id") && a.can_act;
         });
       });
     }
-  }.property('post', 'flagTopic', 'actions_summary.@each.can_act'),
+  }.property("post", "flagTopic", "model.actions_summary.@each.can_act"),
+
+  staffFlagsAvailable: function() {
+    return (
+      this.get("model.flagsAvailable") &&
+      this.get("model.flagsAvailable").length > 1
+    );
+  }.property("post", "flagTopic", "model.actions_summary.@each.can_act"),
 
   submitEnabled: function() {
-    var selected = this.get('selected');
+    const selected = this.get("selected");
     if (!selected) return false;
 
-    if (selected.get('is_custom_flag')) {
-      var len = this.get('message.length') || 0;
-      return len >= Discourse.SiteSettings.min_private_message_post_length &&
-             len <= Discourse.PostActionType.MAX_MESSAGE_LENGTH;
+    if (selected.get("is_custom_flag")) {
+      const len = this.get("message.length") || 0;
+      return (
+        len >= Discourse.SiteSettings.min_personal_message_post_length &&
+        len <= MAX_MESSAGE_LENGTH
+      );
     }
     return true;
-  }.property('selected.is_custom_flag', 'message.length'),
+  }.property("selected.is_custom_flag", "message.length"),
 
-  submitDisabled: Em.computed.not('submitEnabled'),
+  submitDisabled: Ember.computed.not("submitEnabled"),
 
   // Staff accounts can "take action"
-  canTakeAction: function() {
-    if (this.get("flagTopic")) return false;
-
-    // We can only take actions on non-custom flags
-    if (this.get('selected.is_custom_flag')) return false;
-    return Discourse.User.currentProp('staff');
-  }.property('selected.is_custom_flag'),
-
-  submitText: function(){
-    if (this.get('selected.is_custom_flag')) {
-      return "<i class='fa fa-envelope'></i>" + (I18n.t(this.get('flagTopic') ? "flagging_topic.notify_action" : "flagging.notify_action"));
-    } else {
-      return "<i class='fa fa-flag'></i>" + (I18n.t(this.get('flagTopic') ? "flagging_topic.action" : "flagging.action"));
-    }
-  }.property('selected.is_custom_flag'),
-
-  actions: {
-    takeAction: function() {
-      this.send('createFlag', {takeAction: true});
-      this.set('hidden', true);
-    },
-
-    createFlag: function(opts) {
-      var self = this;
-      var postAction; // an instance of ActionSummary
-      if (!this.get('flagTopic')) {
-        postAction = this.get('actionByName.' + this.get('selected.name_key'));
-      } else {
-        postAction = this.get('topicActionByName.' + this.get('selected.name_key'));
-      }
-      var params = this.get('selected.is_custom_flag') ? {message: this.get('message')} : {};
-
-      if (opts) params = $.extend(params, opts);
-
-      this.send('hideModal');
-      postAction.act(params).then(function(result) {
-        self.send('closeModal');
-      }, function(errors) {
-        self.send('closeModal');
-        if (errors && errors.responseText) {
-          bootbox.alert($.parseJSON(errors.responseText).errors);
-        } else {
-          bootbox.alert(I18n.t('generic_error'));
-        }
-      });
-    },
-
-    changePostActionType: function(action) {
-      this.set('selected', action);
-    },
+  @computed("flagTopic", "selected.is_custom_flag")
+  canTakeAction(flagTopic, isCustomFlag) {
+    return !flagTopic && !isCustomFlag && this.currentUser.get("staff");
   },
 
-  canDeleteSpammer: function() {
-    if (this.get("flagTopic")) return false;
+  @computed("selected.is_custom_flag")
+  submitIcon(isCustomFlag) {
+    return isCustomFlag ? "envelope" : "flag";
+  },
 
-    if (Discourse.User.currentProp('staff') && this.get('selected.name_key') === 'spam') {
-      return this.get('userDetails.can_be_deleted') && this.get('userDetails.can_delete_all_posts');
-    } else {
-      return false;
+  @computed("selected.is_custom_flag", "flagTopic")
+  submitLabel(isCustomFlag, flagTopic) {
+    if (isCustomFlag) {
+      return flagTopic
+        ? "flagging_topic.notify_action"
+        : "flagging.notify_action";
     }
-  }.property('selected.name_key', 'userDetails.can_be_deleted', 'userDetails.can_delete_all_posts'),
+    return flagTopic ? "flagging_topic.action" : "flagging.action";
+  },
 
-  usernameChanged: function() {
-    this.set('userDetails', null);
-    this.fetchUserDetails();
-  }.observes('username'),
+  actions: {
+    deleteSpammer() {
+      let details = this.get("spammerDetails");
+      if (details) {
+        details.deleteUser().then(() => window.location.reload());
+      }
+    },
 
-  fetchUserDetails: function() {
-    if( Discourse.User.currentProp('staff') && this.get('username') ) {
-      var flagController = this;
-      Discourse.AdminUser.find(this.get('username').toLowerCase()).then(function(user){
-        flagController.set('userDetails', user);
-      });
+    takeAction() {
+      this.send("createFlag", { takeAction: true });
+      this.set("model.hidden", true);
+    },
+
+    createFlag(opts) {
+      let postAction; // an instance of ActionSummary
+
+      if (!this.get("flagTopic")) {
+        postAction = this.get("model.actions_summary").findBy(
+          "id",
+          this.get("selected.id")
+        );
+      } else {
+        postAction = this.get(
+          "topicActionByName." + this.get("selected.name_key")
+        );
+      }
+
+      let params = this.get("selected.is_custom_flag")
+        ? { message: this.get("message") }
+        : {};
+      if (opts) {
+        params = $.extend(params, opts);
+      }
+
+      this.send("hideModal");
+
+      postAction
+        .act(this.get("model"), params)
+        .then(() => {
+          this.send("closeModal");
+          if (params.message) {
+            this.set("message", "");
+          }
+          this.appEvents.trigger("post-stream:refresh", {
+            id: this.get("model.id")
+          });
+        })
+        .catch(error => {
+          this.send("closeModal");
+          popupAjaxError(error);
+        });
+    },
+
+    createFlagAsWarning() {
+      this.send("createFlag", { isWarning: true });
+      this.set("model.hidden", true);
+    },
+
+    changePostActionType(action) {
+      this.set("selected", action);
     }
+  },
+
+  @computed("flagTopic", "selected.name_key")
+  canSendWarning(flagTopic, nameKey) {
+    return (
+      !flagTopic && this.currentUser.get("staff") && nameKey === "notify_user"
+    );
   }
-
 });

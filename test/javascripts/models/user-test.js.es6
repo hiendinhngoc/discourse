@@ -1,39 +1,68 @@
-module("Discourse.User");
+import User from "discourse/models/user";
+import Group from "discourse/models/group";
 
-test('staff', function(){
-  var user = Discourse.User.create({id: 1, username: 'eviltrout'});
+QUnit.module("model:user");
 
-  ok(!user.get('staff'), "user is not staff");
+QUnit.test("staff", assert => {
+  var user = User.create({ id: 1, username: "eviltrout" });
 
-  user.toggleProperty('moderator');
-  ok(user.get('staff'), "moderators are staff");
+  assert.ok(!user.get("staff"), "user is not staff");
 
-  user.setProperties({moderator: false, admin: true});
-  ok(user.get('staff'), "admins are staff");
+  user.toggleProperty("moderator");
+  assert.ok(user.get("staff"), "moderators are staff");
+
+  user.setProperties({ moderator: false, admin: true });
+  assert.ok(user.get("staff"), "admins are staff");
 });
 
-test('searchContext', function() {
-  var user = Discourse.User.create({id: 1, username: 'EvilTrout'});
+QUnit.test("searchContext", assert => {
+  var user = User.create({ id: 1, username: "EvilTrout" });
 
-  deepEqual(user.get('searchContext'), {type: 'user', id: 'eviltrout', user: user}, "has a search context");
+  assert.deepEqual(
+    user.get("searchContext"),
+    { type: "user", id: "eviltrout", user: user },
+    "has a search context"
+  );
 });
 
-test("isAllowedToUploadAFile", function() {
-  var user = Discourse.User.create({ trust_level: 0, admin: true });
-  ok(user.isAllowedToUploadAFile("image"), "admin can always upload a file");
+QUnit.test("isAllowedToUploadAFile", assert => {
+  var user = User.create({ trust_level: 0, admin: true });
+  assert.ok(
+    user.isAllowedToUploadAFile("image"),
+    "admin can always upload a file"
+  );
 
   user.setProperties({ admin: false, moderator: true });
-  ok(user.isAllowedToUploadAFile("image"), "moderator can always upload a file");
+  assert.ok(
+    user.isAllowedToUploadAFile("image"),
+    "moderator can always upload a file"
+  );
 });
 
-test("avatarTemplate", function(){
-  var oldCDN = Discourse.CDN;
-  var oldBase = Discourse.BaseUrl;
-  Discourse.BaseUrl = "frogs.com";
+QUnit.test("canMangeGroup", assert => {
+  let user = User.create({ admin: true });
+  let group = Group.create({ automatic: true });
 
-  equal(Discourse.User.avatarTemplate("sam", 1), "/user_avatar/frogs.com/sam/{size}/1.png");
-  Discourse.CDN = "http://awesome.cdn.com";
-  equal(Discourse.User.avatarTemplate("sam", 1), "http://awesome.cdn.com/user_avatar/frogs.com/sam/{size}/1.png");
-  Discourse.CDN = oldCDN;
-  Discourse.BaseUrl = oldBase;
+  assert.equal(
+    user.canManageGroup(group),
+    false,
+    "automatic groups cannot be managed."
+  );
+
+  group.set("automatic", false);
+
+  assert.equal(
+    user.canManageGroup(group),
+    true,
+    "an admin should be able to manage the group"
+  );
+
+  user.set("admin", false);
+  group.setProperties({ is_group_owner: true });
+
+  assert.equal(
+    user.canManageGroup(group),
+    true,
+    "a group owner should be able to manage the group"
+  );
 });
